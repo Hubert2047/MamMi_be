@@ -1,7 +1,7 @@
 import mongoose, { Schema, Document } from 'mongoose'
 
 export interface IItem extends Document {
-    name: string
+    names: Map<string, string>
     variants: string[] | null
     price: Map<string, number>
     categoryId: mongoose.Types.ObjectId
@@ -12,7 +12,7 @@ export interface IItem extends Document {
 
 const ItemSchema = new Schema<IItem>(
     {
-        name: { type: String, required: true },
+        names: { type: Map, of: String, required: true },
         variants: {
             type: [String],
             default: [],

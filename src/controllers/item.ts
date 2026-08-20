@@ -5,6 +5,7 @@ import mongoose from 'mongoose'
 export const getItems = async (req: Request, res: Response) => {
     try {
         const { active } = req.query
+        const language = typeof req.query.lang === 'string' ? req.query.lang : 'vi'
         const filter: any = {}
         if (active) {
             filter.active = active === 'true'
@@ -21,6 +22,7 @@ export const getItems = async (req: Request, res: Response) => {
 
         const result = items.map((item: any) => ({
             ...item,
+            name: item.names?.[language] || item.names?.vi || Object.values(item.names || {})[0] || '',
             categoryName: item.categoryId?.name,
         }))
 
@@ -73,7 +75,7 @@ export const createItem = async (req: Request, res: Response) => {
 }
 
 export const serverCreateItem = async (data: {
-    name: string
+    names: Record<string, string>
     variants: string[] | null
     price: Map<string, number>
     addons: string[]
@@ -82,14 +84,14 @@ export const serverCreateItem = async (data: {
     active: boolean
 }) => {
     try {
-        const existing = await Item.findOne({ name: data.name })
+        const existing = await Item.findOne({ 'names.vi': data.names.vi })
         if (existing) {
-            console.log(`Item "${data.name}" đã tồn tại, bỏ qua.`)
+            console.log(`Item "${data.names.vi}" đã tồn tại, bỏ qua.`)
             return null
         }
         const addonsIds = data.addons.map((id) => new mongoose.Types.ObjectId(id))
         const item = new Item({
-            name: data.name,
+            names: data.names,
             basePrice: data.price,
             variants: data.variants,
             addons: addonsIds,
@@ -98,7 +100,7 @@ export const serverCreateItem = async (data: {
             active: data.active,
         })
         await item.save()
-        console.log(`Item "${data.name}" đã được tạo thành công.`)
+        console.log(`Item "${data.names.vi}" đã được tạo thành công.`)
         return item
     } catch (error) {
         console.error('Create item failed:', error)
@@ -108,7 +110,7 @@ export const serverCreateItem = async (data: {
 export const serverUpdateItem = async (name: string, price: Map<string, number>) => {
   try {
     const updated = await Item.findOneAndUpdate(
-      { name },
+      { 'names.vi': name },
       { $set: { price } },
       { returnDocument: 'after' }
     )
