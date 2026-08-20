@@ -1,6 +1,6 @@
 import bcrypt from 'bcrypt'
 import type { Request, Response, NextFunction } from 'express'
-import type { AuthRequest, Role } from '../middlewares/auth.js'
+import { Role, type AuthRequest } from '../middlewares/auth.js'
 import User from '../models/user.js'
 import { customError, generateTokens } from '../utils/index.js'
 import UserToken from '../models/user-token.js'
@@ -111,4 +111,17 @@ export const serverRegister = async (account: string, password: string, role: Ro
     } catch (err) {
         console.log(err)
     }
+}
+
+export async function ensureDefaultUsers() {
+    await serverRegister(
+        process.env.DEFAULT_EMPLOYEE_ACCOUNT || 'employee',
+        process.env.DEFAULT_EMPLOYEE_PASSWORD || 'employee',
+        Role.Employee,
+    )
+    await serverRegister(
+        process.env.DEFAULT_ADMIN_ACCOUNT || 'admin',
+        process.env.DEFAULT_ADMIN_PASSWORD || 'admin123456',
+        Role.Admin,
+    )
 }

@@ -18,12 +18,14 @@ import auth from './routers/auth.js'
 import shiftAttendance from './routers/shift-attendance.js'
 import cookieParser from 'cookie-parser'
 import webhook from './routers/webhook.js'
+import { ensureDefaultUsers } from './controllers/auth.js'
 dotenv.config()
 
 
 const app: Application = express()
 ;(async () => {
     await connectDB()
+    await ensureDefaultUsers()
     app.use(cookieParser())
     const port = process.env.SERVER_BACKUP_PORT || 8080
     app.use(cors({credentials: true,}))
