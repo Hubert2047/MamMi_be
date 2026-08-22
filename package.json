@@ -5,7 +5,6 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/server.js",
-    "migrate:daily-closing": "tsx src/migrations/20260822-daily-closing-periods.ts",
     "dev": "nodemon --watch src --ext ts --exec \"tsx src/server.ts\"",
     "test": "vitest run",
     "test:watch": "vitest"
