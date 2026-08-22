@@ -3,12 +3,13 @@ import Expense from '../models/expense.js'
 import Order from '../models/order.js'
 import Revenue from '../models/revenue.js'
 import { getFullDay } from '../utils/index.js'
-import { calculateSystemAmount } from '../utils/dailyClosingCalculations.js'
-import { buildPaidOrderFilter } from '../utils/paidOrderFilters.js'
+import { calculateSystemAmount, getClosingPeriodFilter } from '../utils/dailyClosingCalculations.js'
 
 export type SalesByPaymentSummary = Record<string, { totalSales: number; count: number }>
 
 export type DailyClosingSummary = {
+    periodStart: Date
+    periodEnd: Date
     salesByPayment: SalesByPaymentSummary
     cashSales: number
     otherRevenueTotal: number
@@ -17,21 +18,22 @@ export type DailyClosingSummary = {
     systemAmount: number
 }
 
-export async function getDailyClosingSummary(): Promise<DailyClosingSummary> {
-    const { start, end } = getFullDay(0)
-    const { start: previousStart, end: previousEnd } = getFullDay(1)
-    const [salesResult, previousClosing, otherRevenueResult, expensesResult] = await Promise.all([
+export async function getDailyClosingSummary(end = new Date()): Promise<DailyClosingSummary> {
+    const { start } = getFullDay(0)
+    const latestClosing = await DailyClosing.findOne({ status: { $ne: 'voided' } }).sort({ periodEnd: -1, createdAt: -1 }).lean()
+    const periodStart = latestClosing?.periodEnd ?? latestClosing?.createdAt ?? start
+    const periodFilter = getClosingPeriodFilter(periodStart, start, end)
+    const [salesResult, otherRevenueResult, expensesResult] = await Promise.all([
         Order.aggregate([
-            { $match: buildPaidOrderFilter(start, end) },
+            { $match: { paidAt: periodFilter, status: 'paid' } },
             { $group: { _id: '$paymentMethod', totalSales: { $sum: '$totalPrice' }, count: { $sum: 1 } } },
         ]),
-        DailyClosing.findOne({ createdAt: { $gte: previousStart, $lte: previousEnd } }).sort({ createdAt: -1 }).lean(),
         Revenue.aggregate([
-            { $match: { createdAt: { $gte: start, $lte: end } } },
+            { $match: { createdAt: periodFilter } },
             { $group: { _id: null, total: { $sum: '$price' } } },
         ]),
         Expense.aggregate([
-            { $match: { createdAt: { $gte: start, $lte: end } } },
+            { $match: { createdAt: periodFilter } },
             { $group: { _id: null, total: { $sum: '$price' } } },
         ]),
     ])
@@ -43,9 +45,11 @@ export async function getDailyClosingSummary(): Promise<DailyClosingSummary> {
     const cashSales = salesByPayment.cash?.totalSales ?? 0
     const otherRevenueTotal = otherRevenueResult[0]?.total ?? 0
     const expensesTotal = expensesResult[0]?.total ?? 0
-    const previousClosingAmount = previousClosing?.actualTotal ?? 0
+    const previousClosingAmount = latestClosing?.actualTotal ?? 0
 
     return {
+        periodStart,
+        periodEnd: end,
         salesByPayment,
         cashSales,
         otherRevenueTotal,

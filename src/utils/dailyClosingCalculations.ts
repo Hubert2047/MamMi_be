@@ -1,5 +1,21 @@
 export type ClosingCashData = Record<string, number | string>
 
+export type ClosingPeriodFilter = {
+    $gte?: Date
+    $gt?: Date
+    $lte: Date
+}
+
+export function getClosingPeriodFilter(lastClosingAt: Date | undefined, firstPeriodStart: Date, end: Date): ClosingPeriodFilter {
+    return lastClosingAt
+        ? { $gt: lastClosingAt, $lte: end }
+        : { $gte: firstPeriodStart, $lte: end }
+}
+
+export function canVoidLatestClosing(closingId: string, latestClosingId: string): boolean {
+    return closingId === latestClosingId
+}
+
 export function isValidCashData(cash: ClosingCashData): boolean {
     return Object.entries(cash).every(([denomination, count]) => {
         const denominationNumber = Number(denomination)

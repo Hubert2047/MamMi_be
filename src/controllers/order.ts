@@ -4,6 +4,7 @@ import { getFromDayUntilNow, getFullDay } from '../utils/index.js'
 import { calculateTotal } from '../utils/orderCalculations.js'
 import { getPaidAt } from '../utils/orderPaymentCalculations.js'
 import { buildPaidOrderFilter } from '../utils/paidOrderFilters.js'
+import { assertFinancialPeriodOpen, FinancialPeriodClosedError } from '../services/financialPeriodLock.js'
 
 export const getNextOrderNumber = async (req: Request, res: Response) => {
     try {
@@ -134,6 +135,8 @@ export const cancelOrder = async (req: Request, res: Response) => {
             })
         }
 
+        if (order.paidAt) await assertFinancialPeriodOpen(order.paidAt)
+
         const updated = await Order.findByIdAndUpdate(id, { status: 'cancelled' }, { returnDocument: 'after' })
 
         res.json({
@@ -141,6 +144,9 @@ export const cancelOrder = async (req: Request, res: Response) => {
             data: updated,
         })
     } catch (error) {
+        if (error instanceof FinancialPeriodClosedError) {
+            return res.status(error.statusCode).json({ success: false, message: error.message })
+        }
         res.status(500).json({
             success: false,
             message: 'Error cancelling order',
@@ -200,6 +206,9 @@ export const updateOrderStatus = async (req: Request, res: Response) => {
     try {
         const { id } = req.params
         const { status } = req.body
+        const order = await Order.findById(id).select({ paidAt: 1 }).lean()
+        if (!order) return res.status(404).json({ success: false, message: 'Order not found' })
+        if (order.paidAt) await assertFinancialPeriodOpen(order.paidAt)
 
         const updated = await Order.findByIdAndUpdate(
             id,
@@ -212,6 +221,9 @@ export const updateOrderStatus = async (req: Request, res: Response) => {
             data: updated,
         })
     } catch (error) {
+        if (error instanceof FinancialPeriodClosedError) {
+            return res.status(error.statusCode).json({ success: false, message: error.message })
+        }
         res.status(400).json({
             success: false,
             message: 'Error updating order',
@@ -223,6 +235,9 @@ export const updateOrderPayment = async (req: Request, res: Response) => {
     try {
         const { id } = req.params
         const { paymentMethod } = req.body
+        const order = await Order.findById(id).select({ paidAt: 1 }).lean()
+        if (!order) return res.status(404).json({ success: false, message: 'Order not found' })
+        if (order.paidAt) await assertFinancialPeriodOpen(order.paidAt)
         const updated = await Order.findByIdAndUpdate(id, { paymentMethod }, { returnDocument: 'after' })
 
         res.json({
@@ -230,6 +245,9 @@ export const updateOrderPayment = async (req: Request, res: Response) => {
             data: updated,
         })
     } catch (error) {
+        if (error instanceof FinancialPeriodClosedError) {
+            return res.status(error.statusCode).json({ success: false, message: error.message })
+        }
         res.status(400).json({
             success: false,
             message: 'Error updating order',

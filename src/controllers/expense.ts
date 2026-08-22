@@ -1,6 +1,7 @@
 import type { Request, Response } from 'express'
 import Expense from '../models/expense.js'
 import { getFromDayUntilNow } from '../utils/index.js'
+import { assertFinancialPeriodOpen, FinancialPeriodClosedError } from '../services/financialPeriodLock.js'
 export const createExpense = async (req: Request, res: Response) => {
     try {
         const { name, price, note } = req.body
@@ -34,10 +35,13 @@ export const getExpenses = async (req: Request, res: Response) => {
 export const deleteExpense = async (req: Request, res: Response) => {
     try {
         const { id } = req.params
+        const expense = await Expense.findById(id).select({ createdAt: 1 }).lean()
+        if (!expense) return res.status(404).json({ success: false, message: 'Expense not found' })
+        await assertFinancialPeriodOpen(expense.createdAt)
 
-        const expense = await Expense.findByIdAndDelete(id)
+        const deletedExpense = await Expense.findByIdAndDelete(id)
 
-        if (!expense) {
+        if (!deletedExpense) {
             return res.status(404).json({
                 success: false,
                 message: 'Expense not found',
@@ -47,9 +51,12 @@ export const deleteExpense = async (req: Request, res: Response) => {
         res.json({
             success: true,
             message: 'Expense deleted successfully',
-            data: expense,
+            data: deletedExpense,
         })
     } catch (error) {
+        if (error instanceof FinancialPeriodClosedError) {
+            return res.status(error.statusCode).json({ success: false, message: error.message })
+        }
         res.status(500).json({
             success: false,
             message: 'Error deleting expense',
@@ -68,6 +75,9 @@ export const updateExpense = async (req: Request, res: Response) => {
                 message: 'Thiếu id',
             })
         }
+        const expense = await Expense.findById(id).select({ createdAt: 1 }).lean()
+        if (!expense) return res.status(404).json({ success: false, message: 'Expense not found' })
+        await assertFinancialPeriodOpen(expense.createdAt)
 
         const updated = await Expense.findByIdAndUpdate(
             id,
@@ -93,6 +103,9 @@ export const updateExpense = async (req: Request, res: Response) => {
             data: updated,
         })
     } catch (error) {
+        if (error instanceof FinancialPeriodClosedError) {
+            return res.status(error.statusCode).json({ success: false, message: error.message })
+        }
         return res.status(500).json({
             success: false,
             message: 'Error updating expense',

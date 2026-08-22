@@ -1,6 +1,7 @@
 import type { Request, Response } from 'express'
 import Revenue from '../models/revenue.js'
 import { getFromDayUntilNow } from '../utils/index.js'
+import { assertFinancialPeriodOpen, FinancialPeriodClosedError } from '../services/financialPeriodLock.js'
 export const createRevenue = async (req: Request, res: Response) => {
     try {
         const { name, price, note } = req.body
@@ -34,10 +35,13 @@ export const getRevenues = async (req: Request, res: Response) => {
 export const deleteRevenue = async (req: Request, res: Response) => {
     try {
         const { id } = req.params
+        const revenue = await Revenue.findById(id).select({ createdAt: 1 }).lean()
+        if (!revenue) return res.status(404).json({ success: false, message: 'Revenue not found' })
+        await assertFinancialPeriodOpen(revenue.createdAt)
 
-        const revenue = await Revenue.findByIdAndDelete(id)
+        const deletedRevenue = await Revenue.findByIdAndDelete(id)
 
-        if (!revenue) {
+        if (!deletedRevenue) {
             return res.status(404).json({
                 success: false,
                 message: 'Revenue not found',
@@ -47,9 +51,12 @@ export const deleteRevenue = async (req: Request, res: Response) => {
         res.json({
             success: true,
             message: 'Revenue deleted successfully',
-            data: revenue,
+            data: deletedRevenue,
         })
     } catch (error) {
+        if (error instanceof FinancialPeriodClosedError) {
+            return res.status(error.statusCode).json({ success: false, message: error.message })
+        }
         res.status(500).json({
             success: false,
             message: 'Error deleting Revenue',
@@ -68,6 +75,9 @@ export const updateRevenue = async (req: Request, res: Response) => {
                 message: 'Thiếu id',
             })
         }
+        const revenue = await Revenue.findById(id).select({ createdAt: 1 }).lean()
+        if (!revenue) return res.status(404).json({ success: false, message: 'Revenue not found' })
+        await assertFinancialPeriodOpen(revenue.createdAt)
 
         const updated = await Revenue.findByIdAndUpdate(
             id,
@@ -93,6 +103,9 @@ export const updateRevenue = async (req: Request, res: Response) => {
             data: updated,
         })
     } catch (error) {
+        if (error instanceof FinancialPeriodClosedError) {
+            return res.status(error.statusCode).json({ success: false, message: error.message })
+        }
         return res.status(500).json({
             success: false,
             message: 'Error updating Revenue',

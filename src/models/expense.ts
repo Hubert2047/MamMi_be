@@ -4,6 +4,8 @@ export interface IExpense extends Document {
   name: string;       
   price: number;    
   note?: string;    
+  createdAt: Date;
+  updatedAt: Date;
 }
 
 const ExpenseSchema = new Schema<IExpense>({

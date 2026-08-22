@@ -1,17 +1,16 @@
 import type { Request, Response } from 'express'
 import DailyClosing from '../models/daily-closing.js'
-import { getFromDayUntilNow, getFullDay, TIME_ZONE } from '../utils/index.js'
+import { getFromDayUntilNow, TIME_ZONE } from '../utils/index.js'
 import { sendMessageToGroup } from '../services/line.js'
-import { toZonedTime, fromZonedTime } from 'date-fns-tz'
+import { toZonedTime } from 'date-fns-tz'
 import { format } from 'date-fns'
-import { calculateActualCash, isValidCashData, requiresClosingReason } from '../utils/dailyClosingCalculations.js'
+import { calculateActualCash, canVoidLatestClosing, isValidCashData, requiresClosingReason } from '../utils/dailyClosingCalculations.js'
 import { getDailyClosingSummary as loadDailyClosingSummary } from '../services/dailyClosingSummary.js'
+import type { AuthRequest } from '../middlewares/auth.js'
+
 export const createDailyClosing = async (req: Request, res: Response) => {
     try {
         const { actualTotal, systemAmount, cash, reason } = req.body
-        const { start, end } = getFullDay(0)
-        const closingDay = new Intl.DateTimeFormat('en-CA', { timeZone: TIME_ZONE }).format(new Date())
-
         if (!Number.isFinite(Number(actualTotal)) || !Number.isFinite(Number(systemAmount)) || !cash || typeof cash !== 'object') {
             return res.status(400).json({ success: false, message: 'Invalid daily closing amounts or cash data' })
         }
@@ -23,85 +22,85 @@ export const createDailyClosing = async (req: Request, res: Response) => {
             return res.status(400).json({ success: false, message: 'Actual total does not match cash counts' })
         }
 
-        const summary = await loadDailyClosingSummary()
+        const periodEnd = new Date()
+        const summary = await loadDailyClosingSummary(periodEnd)
         const calculatedSystemAmount = summary.systemAmount
         if (requiresClosingReason(Number(actualTotal) - calculatedSystemAmount, reason)) {
             return res.status(400).json({ success: false, message: 'A reason is required when there is a difference' })
         }
 
-        const existing = await DailyClosing.findOne({
-            $or: [
-                { closingDay },
-                { createdAt: { $gte: start, $lte: end } },
-            ],
-        }).lean()
-        if (existing) {
-            return res.status(400).json({
-                success: false,
-                message: 'Today already has a DailyClosing record',
-            })
-        }
-
         const dailyClosing = new DailyClosing({
+            periodStart: summary.periodStart,
+            periodEnd,
+            status: 'confirmed',
             actualTotal,
             systemAmount: calculatedSystemAmount,
             cash,
             reason,
-            closingDay,
-            createdAt: new Date(), // optional, Mongo tự set createdAt
+            previousClosingAmount: summary.previousClosingAmount,
+            cashSales: summary.cashSales,
+            otherRevenueTotal: summary.otherRevenueTotal,
+            expensesTotal: summary.expensesTotal,
+            difference: Number(actualTotal) - calculatedSystemAmount,
+            confirmedAt: periodEnd,
+            confirmedBy: (req as AuthRequest).user?.account,
         })
         await dailyClosing.save()
         const now = toZonedTime(new Date(), TIME_ZONE)
         const formatted = format(now, 'dd/MM/yyyy HH:mm')
         sendMessageToGroup(
             process.env.DAILY_CLOSING_LINE_GROUP_ID!,
-            `Kết toán hôm nay (${formatted}):\n- Số tiền thực tế: ${actualTotal}\n- Số tiền hệ thống: ${calculatedSystemAmount}\n- Chênh lệch: ${actualTotal - calculatedSystemAmount}\n- Lý do: ${reason}`,
+            `Kết toán (${formatted}):\n- Số tiền thực tế: ${actualTotal}\n- Số tiền hệ thống: ${calculatedSystemAmount}\n- Chênh lệch: ${actualTotal - calculatedSystemAmount}\n- Lý do: ${reason}`,
         )
-        res.status(201).json({
-            success: true,
-            data: dailyClosing,
-        })
+        return res.status(201).json({ success: true, data: dailyClosing })
     } catch (error) {
         console.error(error)
-        res.status(500).json({
-            success: false,
-            message: 'Error creating DailyClosing',
-            error,
-        })
+        return res.status(500).json({ success: false, message: 'Error creating DailyClosing', error })
     }
 }
+
 export const getDailyClosingSummary = async (req: Request, res: Response) => {
     try {
         const summary = await loadDailyClosingSummary()
-        res.json({ success: true, data: summary })
+        return res.json({ success: true, data: summary })
     } catch (error) {
-        if (error && typeof error === 'object' && 'code' in error && error.code === 11000) {
-            return res.status(400).json({ success: false, message: 'Today already has a DailyClosing record' })
-        }
         console.error(error)
-        res.status(500).json({ success: false, message: 'Error fetching daily closing summary', error })
+        return res.status(500).json({ success: false, message: 'Error fetching daily closing summary', error })
     }
 }
-export const getClosingOfYesterday = async (req: Request, res: Response) => {
-    try {
-        const { start, end } = getFullDay(1)
-        const closing = await DailyClosing.findOne({
-            createdAt: { $gte: start, $lte: end },
-        })
 
-        res.json({
-            success: true,
-            data: { amount: closing ? closing.actualTotal : 0 },
-        })
+export const voidDailyClosing = async (req: Request, res: Response) => {
+    try {
+        const id = String(req.params.id)
+        const { reason } = req.body
+        if (typeof reason !== 'string' || !reason.trim()) {
+            return res.status(400).json({ success: false, message: 'A reason is required to void a closing' })
+        }
+
+        const closing = await DailyClosing.findById(id).lean()
+        if (!closing) return res.status(404).json({ success: false, message: 'DailyClosing not found' })
+        if (closing.status === 'voided') return res.status(400).json({ success: false, message: 'DailyClosing is already voided' })
+
+        const latest = await DailyClosing.findOne({ status: { $ne: 'voided' } })
+            .sort({ periodEnd: -1, createdAt: -1 })
+            .select({ _id: 1 })
+            .lean()
+        if (!latest || !canVoidLatestClosing(String(closing._id), String(latest._id))) {
+            return res.status(409).json({ success: false, message: 'Only the latest confirmed closing can be voided' })
+        }
+
+        const result = await DailyClosing.updateOne(
+            { _id: id, status: 'confirmed' },
+            { status: 'voided', voidedAt: new Date(), voidedBy: (req as AuthRequest).user.account, voidReason: reason.trim() },
+        )
+        if (result.modifiedCount !== 1) return res.status(409).json({ success: false, message: 'DailyClosing changed before it was voided' })
+        return res.json({ success: true, data: await DailyClosing.findById(id) })
     } catch (error) {
         console.error(error)
-        res.status(500).json({
-            success: false,
-            message: 'Error fetching yesterday closing',
-            error,
-        })
+        return res.status(500).json({ success: false, message: 'Error voiding DailyClosing', error })
     }
 }
+
 export const getDailyClosings = async (req: Request, res: Response) => {
     try {
         const { days } = req.query
@@ -111,83 +110,12 @@ export const getDailyClosings = async (req: Request, res: Response) => {
             const { start } = getFromDayUntilNow(daysNumber)
             filter.createdAt = { $gte: start }
         } else {
-            const { start, end } = getFromDayUntilNow(0)
-            filter.createdAt = { $gte: start, $lte: end }
+            filter.status = { $ne: 'voided' }
         }
-        const dailyClosings = await DailyClosing.find(filter).sort({ createdAt: -1 })
-
-        res.json({ success: true, data: dailyClosings })
+        const dailyClosings = await DailyClosing.find(filter).sort({ createdAt: -1 }).lean()
+        return res.json({ success: true, data: dailyClosings })
     } catch (error) {
         console.error(error)
-        res.status(500).json({ success: false, message: 'Error fetching DailyClosing', error })
-    }
-}
-export const deleteDailyClosing = async (req: Request, res: Response) => {
-    try {
-        const { id } = req.params
-
-        const dailyClosing = await DailyClosing.findByIdAndDelete(id)
-
-        if (!dailyClosing) {
-            return res.status(404).json({
-                success: false,
-                message: 'DailyClosing not found',
-            })
-        }
-
-        res.json({
-            success: true,
-            message: 'DailyClosing deleted successfully',
-            data: dailyClosing,
-        })
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: 'Error deleting DailyClosing',
-            error,
-        })
-    }
-}
-
-export const updateDailyClosing = async (req: Request, res: Response) => {
-    try {
-        const { id } = req.params
-        const data = req.body
-        if (!id) {
-            return res.status(400).json({
-                success: false,
-                message: 'Thiếu id',
-            })
-        }
-
-        const updated = await DailyClosing.findByIdAndUpdate(
-            id,
-            {
-                ...data,
-                price: Number(data.price),
-            },
-            {
-                runValidators: true,
-                returnDocument: 'after',
-            },
-        )
-
-        if (!updated) {
-            return res.status(404).json({
-                success: false,
-                message: 'Không tìm thấy DailyClosing',
-            })
-        }
-
-        return res.json({
-            success: true,
-            data: updated,
-        })
-    } catch (error) {
-        return res.status(500).json({
-            success: false,
-            message: 'Error updating DailyClosing',
-            error,
-        })
+        return res.status(500).json({ success: false, message: 'Error fetching DailyClosing', error })
     }
 }

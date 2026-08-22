@@ -4,6 +4,8 @@ export interface IRevenue extends Document {
   name: string;       
   price: number;    
   note?: string;    
+  createdAt: Date;
+  updatedAt: Date;
 }
 
 const RevenueSchema = new Schema<IRevenue>({
