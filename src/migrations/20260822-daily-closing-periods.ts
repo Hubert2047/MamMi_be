@@ -75,6 +75,9 @@ async function migrate(): Promise<void> {
     if (indexes.some((index) => index.name === 'closingDay_1')) {
         await dailyClosings.dropIndex('closingDay_1')
     }
+    await dailyClosings.createIndex({ createdAt: 1 })
+    await dailyClosings.createIndex({ status: 1, periodEnd: -1 })
+    await dailyClosings.createIndex({ status: 1, periodStart: 1, periodEnd: 1 })
 
     console.log(`Migrated ${legacyClosings.length} daily closing records`)
 }
