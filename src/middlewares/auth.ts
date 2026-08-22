@@ -1,13 +1,10 @@
 import type { NextFunction, Request, Response } from 'express'
 import jwt from 'jsonwebtoken'
 import { customError } from '../utils/index.js'
-
-export enum Role {
-    SuperAdmin = 'SuperAdmin',
-    Admin = 'Admin',
-    Employee = 'Employee',
-    Guest = 'Guest',
-}
+import User from '../models/user.js'
+import Store from '../models/store.js'
+import { Role } from '../constants/role.js'
+export { Role } from '../constants/role.js'
 export interface T_UserToken {
     account: string
     role: Role
@@ -25,6 +22,19 @@ export default async function authenticateToken(req: any, res: Response, next: N
 
     try {
         const user: any = jwt.verify(token, process.env.ACCESS_TOKEN_PRIVATE_KEY as string)
+        const requestedStoreId = req.headers['x-store-id']
+        if (requestedStoreId) {
+            const storeId = String(requestedStoreId)
+            const store = await Store.findOne({ _id: storeId, active: true }).select({ _id: 1 }).lean()
+            if (!store) return res.status(403).json({ error: true, message: 'Store is not available' })
+            if (user.role !== Role.SuperAdmin) {
+                const account = await User.findOne({ account: user.account }).select({ storeIds: 1 }).lean()
+                if (!account?.storeIds?.some((id) => String(id) === storeId)) {
+                    return res.status(403).json({ error: true, message: 'You do not have access to this store' })
+                }
+            }
+            user.storeId = storeId
+        }
         req.user = user
         next()
     } catch (error: any) {

@@ -1,18 +1,20 @@
 import mongoose, { Schema, Document } from 'mongoose'
 
 export interface IDiscount extends Document {
-    name: string
-    amount: number
+    names: { vi: string; en: string; 'zh-TW': string }
+    name?: string
     type: 'percent' | 'value'
-    active: boolean
     note?: string
 }
 
 const DiscountSchema = new Schema<IDiscount>(
     {
-        name: { type: String, required: true },
-        amount: { type: Number, required: true },
-        active: { type: Boolean, default: true },
+        names: {
+            vi: { type: String, default: '' },
+            en: { type: String, default: '' },
+            'zh-TW': { type: String, default: '' },
+        },
+        name: { type: String, trim: true },
         type: {
             type: String,
             enum: ['percent', 'value'],

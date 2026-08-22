@@ -6,9 +6,9 @@ import authorizationPermissions from '../middlewares/permissions.js'
 const router = Router()
 
 router.get('/', authenticateToken, getAllAddons)
-router.post('/', authenticateToken, createAddon)
+router.post('/', authenticateToken, authorizationPermissions([Role.SuperAdmin]), createAddon)
 router.get('/:id', authenticateToken, getAddonById)
-router.put('/:id', authenticateToken, authorizationPermissions([Role.Admin, Role.SuperAdmin]), updateAddon)
-router.delete('/:id', authenticateToken, authorizationPermissions([Role.Admin, Role.SuperAdmin]), deleteAddon)
+router.put('/:id', authenticateToken, authorizationPermissions([Role.SuperAdmin]), updateAddon)
+router.delete('/:id', authenticateToken, authorizationPermissions([Role.SuperAdmin]), deleteAddon)
 
 export default router

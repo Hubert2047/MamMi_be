@@ -10,13 +10,13 @@ import StoreAddon from '../models/store-addon.js'
 
 export async function ensureStoreCatalog(storeId: string): Promise<void> {
     const storeObjectId = new mongoose.Types.ObjectId(storeId)
-    const items = await Item.find().select({ _id: 1, price: 1, active: 1 }).lean()
+    const items = await Item.find().select({ _id: 1 }).lean()
     if (!items.length) return
     await StoreItem.bulkWrite(
         items.map((item: any) => ({
             updateOne: {
                 filter: { storeId: storeObjectId, itemId: item._id },
-                update: { $setOnInsert: { storeId: storeObjectId, itemId: item._id, price: item.price || {}, active: item.active !== false } },
+                update: { $setOnInsert: { storeId: storeObjectId, itemId: item._id, price: new Map<string, number>(), active: true } },
                 upsert: true,
             },
         })),
@@ -26,12 +26,12 @@ export async function ensureStoreCatalog(storeId: string): Promise<void> {
 
 export async function ensureStoreAddons(storeId: string): Promise<void> {
     const storeObjectId = new mongoose.Types.ObjectId(storeId)
-    const addons = await Addon.find().select({ _id: 1, priceExtra: 1, active: 1 }).lean()
+    const addons = await Addon.find().select({ _id: 1 }).lean()
     if (!addons.length) return
     await StoreAddon.bulkWrite(addons.map((addon: any) => ({
         updateOne: {
             filter: { storeId: storeObjectId, addonId: addon._id },
-            update: { $setOnInsert: { storeId: storeObjectId, addonId: addon._id, priceExtra: addon.priceExtra, active: addon.active !== false } },
+            update: { $setOnInsert: { storeId: storeObjectId, addonId: addon._id, priceExtra: 0, active: true } },
             upsert: true,
         },
     })), { ordered: false })

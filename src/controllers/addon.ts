@@ -78,7 +78,7 @@ export const createAddon = async (req: Request, res: Response) => {
     try {
         const names = getAddonNames(req.body.names, req.body.name)
         if (!names) return res.status(400).json({ message: 'At least one addon name is required' })
-        const newAddon = new AddonModel({ names, priceExtra: req.body.priceExtra, active: req.body.active })
+        const newAddon = new AddonModel({ names })
         const saved = await newAddon.save()
         res.status(201).json(toResponseAddon(saved))
     } catch (err) {
@@ -86,11 +86,11 @@ export const createAddon = async (req: Request, res: Response) => {
     }
 }
 
-export const serverCreateAddon = async (name: string, priceExtra: number, active: boolean) => {
+export const serverCreateAddon = async (name: string) => {
     try {
         const names = getAddonNames(undefined, name)
         if (!names) return
-        const newAddon = new AddonModel({ names, priceExtra, active })
+        const newAddon = new AddonModel({ names })
         await newAddon.save()
     } catch (err) {}
 }
@@ -100,7 +100,7 @@ export const updateAddon = async (req: any, res: any) => {
     try {
         const names = getAddonNames(req.body.names, req.body.name)
         if (!names) return res.status(400).json({ message: 'At least one addon name is required' })
-        const updated = await AddonModel.findByIdAndUpdate(req.params.id, { $set: { names, priceExtra: req.body.priceExtra, active: req.body.active }, $unset: { name: 1 } }, { returnDocument: 'after', runValidators: true })
+        const updated = await AddonModel.findByIdAndUpdate(req.params.id, { $set: { names }, $unset: { name: 1, priceExtra: 1, active: 1 } }, { returnDocument: 'after', runValidators: true })
         if (!updated) return res.status(404).json({ message: 'Addon not found' })
         res.json(toResponseAddon(updated))
     } catch (err) {

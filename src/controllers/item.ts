@@ -41,7 +41,7 @@ const toCatalogItem = (item: any, language: string) => ({
 export const getCatalogItems = async (req: Request, res: Response) => {
     try {
         const language = typeof req.query.lang === 'string' ? req.query.lang : 'vi'
-        const items = await Item.find().populate('categoryId', 'names name').populate('addons', 'names name priceExtra').lean()
+        const items = await Item.find().populate('categoryId', 'names name').populate('addons', 'names name').lean()
         res.json({ success: true, data: items.map((item) => toCatalogItem(item, language)) })
     } catch (error) { res.status(500).json({ success: false, message: 'Error fetching catalog items', error }) }
 }
@@ -52,7 +52,7 @@ export const createCatalogItem = async (req: Request, res: Response) => {
         if (!names) return res.status(400).json({ success: false, message: 'At least one product name is required' })
         const description = req.body.description === undefined ? undefined : normalizeNames(req.body.description)
         const { price: _price, active: _active, ...data } = req.body
-        const item = await Item.create({ ...data, names, ...(description ? { description } : {}), variants: normalizeOptions(req.body.variants, 'variant'), noteOptions: normalizeOptions(req.body.noteOptions, 'note'), price: {} })
+        const item = await Item.create({ ...data, names, ...(description ? { description } : {}), variants: normalizeOptions(req.body.variants, 'variant'), noteOptions: normalizeOptions(req.body.noteOptions, 'note') })
         res.status(201).json({ success: true, data: item })
     } catch (error) { res.status(400).json({ success: false, message: 'Error creating catalog item', error }) }
 }
@@ -111,7 +111,7 @@ export const getItems = async (req: Request, res: Response) => {
             path: 'itemId',
             populate: [
                 { path: 'categoryId', select: 'names name' },
-                { path: 'addons', match: { active: true }, select: 'names name priceExtra' },
+                { path: 'addons', select: 'names name' },
             ],
         }).lean()
         const addonIds = storeItems.flatMap((storeItem: any) => storeItem.itemId?.addons?.map((addon: any) => addon._id) || [])
@@ -183,7 +183,7 @@ export const createItem = async (req: Request, res: Response) => {
         if (!names) return res.status(400).json({ success: false, message: 'At least one product name is required' })
         const description = req.body.description === undefined ? undefined : normalizeNames(req.body.description)
         const { price = {}, active = true, ...itemData } = req.body
-        const item = new Item({ ...itemData, names, ...(description ? { description } : {}), variants: normalizeOptions(req.body.variants, 'variant'), noteOptions: normalizeOptions(req.body.noteOptions, 'note'), price: {} })
+        const item = new Item({ ...itemData, names, ...(description ? { description } : {}), variants: normalizeOptions(req.body.variants, 'variant'), noteOptions: normalizeOptions(req.body.noteOptions, 'note') })
         await item.save()
         const storeId = (req as AuthRequest).user.storeId
         await StoreItem.create({ storeId, itemId: item._id, price, active })

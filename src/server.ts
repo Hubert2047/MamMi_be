@@ -23,6 +23,8 @@ import cookieParser from 'cookie-parser'
 import webhook from './routers/webhook.js'
 import { ensureDefaultUsers } from './controllers/auth.js'
 import Store from './models/store.js'
+import store from './routers/store.js'
+import user from './routers/user.js'
 import { ensureStoreAddons, ensureStoreCatalog, ensureStoreScopedFinancialData } from './services/storeCatalogMigration.js'
 dotenv.config()
 
@@ -53,6 +55,8 @@ const app: Application = express()
     app.use('/api/store-items', storeItem)
     app.use('/api/orders', order)
     app.use('/api/categories', category)
+    app.use('/api/stores', store)
+    app.use('/api/users', user)
     app.use('/api/expenses', expense)
     app.use('/api/discounts', discount)
     app.use('/api/addons', addon)

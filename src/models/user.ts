@@ -1,11 +1,12 @@
 import mongoose from 'mongoose'
-import { Role } from '../middlewares/auth.js'
+import { Role } from '../constants/role.js'
 
 export interface IUser {
     id: string
     account: string
     password: string
     role: Role
+    active: boolean
     isOnline: boolean
     lastTimeOnline: Date
     storeIds: mongoose.Types.ObjectId[]
@@ -34,6 +35,10 @@ const userSchema = new Schema<IUser>({
     role: {
         type: String,
         enum: Object.values(Role),
+    },
+    active: {
+        type: Boolean,
+        default: true,
     },
     storeIds: [{ type: Schema.Types.ObjectId, ref: 'Store' }],
     defaultStoreId: { type: Schema.Types.ObjectId, ref: 'Store' },

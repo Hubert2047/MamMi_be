@@ -5,24 +5,35 @@ import User from '../models/user.js'
 import { customError, generateTokens } from '../utils/index.js'
 import UserToken from '../models/user-token.js'
 import Store from '../models/store.js'
+import mongoose from 'mongoose'
 export const login = async (req: Request, res: Response, next: NextFunction) => {
     try {
-        const { account, password } = req.body
+        const { account, password, storeId } = req.body
         if (!account || !password) {
             return res.status(200).json({ error: false, message: 'Account and password are required' })
         }
         const user = await User.findOne({ account })
-        const isValid = user && (await bcrypt.compare(password, user.password))
+        const isValid = user && user.active !== false && (await bcrypt.compare(password, user.password))
         if (!isValid) {
             return res.status(200).json({ error: false, message: 'Invalid account or password' })
         }
-        if (!user.defaultStoreId) {
+        let activeStoreId = user.defaultStoreId?.toString()
+        if (storeId && !mongoose.isValidObjectId(storeId)) {
+            return res.status(400).json({ error: true, message: 'Invalid store id' })
+        }
+        if (storeId) {
+            const selectedStore = await Store.findOne({ _id: storeId, active: true }).select({ _id: 1 }).lean()
+            const hasAccess = user.role === Role.SuperAdmin || user.storeIds?.some((id) => id.toString() === String(storeId))
+            if (!selectedStore || !hasAccess) return res.status(403).json({ error: true, message: 'You do not have access to this store' })
+            activeStoreId = String(storeId)
+        }
+        if (!activeStoreId) {
             return res.status(403).json({ error: true, message: 'User is not assigned to a store' })
         }
         const payload = {
             account: user.account,
             role: user.role,
-            storeId: user.defaultStoreId?.toString(),
+            storeId: activeStoreId,
         }
         const { accessToken, refreshToken } = await generateTokens(payload)
 
@@ -97,27 +108,16 @@ export const logout = async (req: Request, res: Response, next: NextFunction) =>
         )
     }
 }
-export const serverRegister = async (account: string, password: string, role: Role, storeId: string) => {
+export const getLoginStores = async (req: Request, res: Response) => {
     try {
-        const user = await User.findOne({
-            account,
-        })
-        if (user) return
-        const saltRounds = Number(process.env.SALT) || 10
-        const salt = await bcrypt.genSalt(Number(saltRounds))
-        const hashPassword = await bcrypt.hash(password, salt)
-
-        await new User({
-            account,
-            role,
-            password: hashPassword,
-            storeIds: [storeId],
-            defaultStoreId: storeId,
-        }).save()
-
-        console.log('User registered successfully')
-    } catch (err) {
-        console.log(err)
+        const { account, password } = req.body
+        const user = await User.findOne({ account }).select({ password: 1, role: 1, storeIds: 1 }).lean()
+        if (!user || user.active === false || !password || !(await bcrypt.compare(password, user.password))) return res.status(401).json({ error: true, message: 'Invalid account or password' })
+        const filter = user.role === Role.SuperAdmin ? { active: true } : { _id: { $in: user.storeIds || [] }, active: true }
+        const stores = await Store.find(filter).select({ code: 1, name: 1 }).sort({ name: 1 }).lean()
+        res.json({ error: false, role: user.role, data: stores })
+    } catch (error: any) {
+        res.status(500).json({ error: true, message: error.message })
     }
 }
 
@@ -128,20 +128,16 @@ export async function ensureDefaultUsers() {
         { upsert: true, returnDocument: 'after' },
     )
     if (!store) throw new Error('Unable to initialize default store')
-    await User.updateMany(
-        { $or: [{ defaultStoreId: { $exists: false } }, { defaultStoreId: null }] },
-        { $set: { defaultStoreId: store._id }, $addToSet: { storeIds: store._id } },
-    )
-    await serverRegister(
-        process.env.DEFAULT_EMPLOYEE_ACCOUNT || 'employee',
-        process.env.DEFAULT_EMPLOYEE_PASSWORD || 'employee',
-        Role.Employee,
-        store._id.toString(),
-    )
-    await serverRegister(
-        process.env.DEFAULT_ADMIN_ACCOUNT || 'admin',
-        process.env.DEFAULT_ADMIN_PASSWORD || 'admin123456',
-        Role.Admin,
-        store._id.toString(),
+    await User.updateMany({ active: { $exists: false } }, { $set: { active: true } })
+    const account = 'superadmin'
+    const password = 'Hubert*17041993'
+    const hashPassword = await bcrypt.hash(password, Number(process.env.SALT) || 10)
+    await User.findOneAndUpdate(
+        { account },
+        {
+            $set: { password: hashPassword, role: Role.SuperAdmin, active: true },
+            $setOnInsert: { storeIds: [store._id], defaultStoreId: store._id },
+        },
+        { upsert: true, returnDocument: 'after' },
     )
 }
