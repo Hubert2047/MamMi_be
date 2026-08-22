@@ -12,4 +12,6 @@ const ExpenseSchema = new Schema<IExpense>({
   note: String
 }, { timestamps: true });
 
+ExpenseSchema.index({ createdAt: 1 });
+
 export default mongoose.model<IExpense>("Expense", ExpenseSchema);

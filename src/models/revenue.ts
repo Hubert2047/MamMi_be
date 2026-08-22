@@ -12,4 +12,6 @@ const RevenueSchema = new Schema<IRevenue>({
   note: String
 }, { timestamps: true });
 
+RevenueSchema.index({ createdAt: 1 });
+
 export default mongoose.model<IRevenue>("Revenue", RevenueSchema);

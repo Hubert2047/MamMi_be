@@ -2,6 +2,8 @@ import type { Request, Response } from 'express'
 import Order from '../models/order.js'
 import { getFromDayUntilNow, getFullDay } from '../utils/index.js'
 import { calculateTotal } from '../utils/orderCalculations.js'
+import { getPaidAt } from '../utils/orderPaymentCalculations.js'
+import { buildPaidOrderFilter } from '../utils/paidOrderFilters.js'
 
 export const getNextOrderNumber = async (req: Request, res: Response) => {
     try {
@@ -17,10 +19,7 @@ export const getSalesByPaymentMethod = async (req: Request, res: Response) => {
         const { start, end } = getFullDay(0)
         const result = await Order.aggregate([
             {
-                $match: {
-                    createdAt: { $gte: start, $lte: end },
-                    status: 'paid',
-                },
+                $match: buildPaidOrderFilter(start, end),
             },
             {
                 $group: {
@@ -70,7 +69,7 @@ export const createOrder = async (req: Request, res: Response) => {
         if (order.checkoutPending && order._id) {
             const updated = await Order.findByIdAndUpdate(
                 order._id,
-                { status: 'paid', paymentMethod: order.paymentMethod },
+                { status: 'paid', paymentMethod: order.paymentMethod, paidAt: getPaidAt('paid') },
                 { returnDocument: 'after' },
             )
             if (!updated) {
@@ -103,6 +102,7 @@ export const createOrder = async (req: Request, res: Response) => {
             paymentMethod: order.paymentMethod,
             discount: order.discount,
             customer: order.customer,
+            paidAt: getPaidAt(order.status),
         })
 
         await newOrder.save()
@@ -201,7 +201,11 @@ export const updateOrderStatus = async (req: Request, res: Response) => {
         const { id } = req.params
         const { status } = req.body
 
-        const updated = await Order.findByIdAndUpdate(id, { status }, { returnDocument: 'after' })
+        const updated = await Order.findByIdAndUpdate(
+            id,
+            { status, ...(status === 'paid' ? { paidAt: getPaidAt('paid') } : {}) },
+            { returnDocument: 'after' },
+        )
 
         res.json({
             success: true,

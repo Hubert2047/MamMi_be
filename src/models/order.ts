@@ -33,6 +33,7 @@ export interface IOrder extends Document {
     items: OrderItem[]
     totalPrice: number
     status: 'pending' | 'paid' | 'cancelled'
+    paidAt?: Date
     type: 'dine_in' | 'takeaway' | 'uber' | 'foodpanda'
     discount?: OrderDiscount
     paymentMethod: string
@@ -45,6 +46,7 @@ const CustomerSchema = new Schema<Customer>(
     },
     { _id: false },
 )
+
 const OrderItemAddonSchema = new Schema<OrderItemAddon>(
     {
         id: String,
@@ -85,6 +87,7 @@ const OrderSchema = new Schema<IOrder>(
         number: { type: Number, required: true },
         items: [OrderItemSchema],
         totalPrice: { type: Number, required: true },
+        paidAt: { type: Date },
         status: {
             type: String,
             enum: ['pending', 'paid', 'cancelled'],
@@ -111,5 +114,9 @@ const OrderSchema = new Schema<IOrder>(
     },
     { timestamps: true },
 )
+
+OrderSchema.index({ createdAt: 1, status: 1, paymentMethod: 1 })
+OrderSchema.index({ paidAt: 1, status: 1, paymentMethod: 1 })
+OrderSchema.index({ createdAt: 1, number: -1 })
 
 export default mongoose.model<IOrder>('Order', OrderSchema)

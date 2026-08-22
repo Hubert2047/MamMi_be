@@ -4,15 +4,37 @@ import { getFromDayUntilNow, getFullDay, TIME_ZONE } from '../utils/index.js'
 import { sendMessageToGroup } from '../services/line.js'
 import { toZonedTime, fromZonedTime } from 'date-fns-tz'
 import { format } from 'date-fns'
+import { calculateActualCash, isValidCashData, requiresClosingReason } from '../utils/dailyClosingCalculations.js'
+import { getDailyClosingSummary as loadDailyClosingSummary } from '../services/dailyClosingSummary.js'
 export const createDailyClosing = async (req: Request, res: Response) => {
     try {
         const { actualTotal, systemAmount, cash, reason } = req.body
-
         const { start, end } = getFullDay(0)
+        const closingDay = new Intl.DateTimeFormat('en-CA', { timeZone: TIME_ZONE }).format(new Date())
+
+        if (!Number.isFinite(Number(actualTotal)) || !Number.isFinite(Number(systemAmount)) || !cash || typeof cash !== 'object') {
+            return res.status(400).json({ success: false, message: 'Invalid daily closing amounts or cash data' })
+        }
+        if (!isValidCashData(cash)) {
+            return res.status(400).json({ success: false, message: 'Cash counts must be non-negative integers' })
+        }
+        const calculatedActualTotal = calculateActualCash(cash)
+        if (calculatedActualTotal !== Number(actualTotal)) {
+            return res.status(400).json({ success: false, message: 'Actual total does not match cash counts' })
+        }
+
+        const summary = await loadDailyClosingSummary()
+        const calculatedSystemAmount = summary.systemAmount
+        if (requiresClosingReason(Number(actualTotal) - calculatedSystemAmount, reason)) {
+            return res.status(400).json({ success: false, message: 'A reason is required when there is a difference' })
+        }
 
         const existing = await DailyClosing.findOne({
-            createdAt: { $gte: start, $lte: end },
-        })
+            $or: [
+                { closingDay },
+                { createdAt: { $gte: start, $lte: end } },
+            ],
+        }).lean()
         if (existing) {
             return res.status(400).json({
                 success: false,
@@ -22,9 +44,10 @@ export const createDailyClosing = async (req: Request, res: Response) => {
 
         const dailyClosing = new DailyClosing({
             actualTotal,
-            systemAmount,
+            systemAmount: calculatedSystemAmount,
             cash,
             reason,
+            closingDay,
             createdAt: new Date(), // optional, Mongo tự set createdAt
         })
         await dailyClosing.save()
@@ -32,7 +55,7 @@ export const createDailyClosing = async (req: Request, res: Response) => {
         const formatted = format(now, 'dd/MM/yyyy HH:mm')
         sendMessageToGroup(
             process.env.DAILY_CLOSING_LINE_GROUP_ID!,
-            `Kết toán hôm nay (${formatted}):\n- Số tiền thực tế: ${actualTotal}\n- Số tiền hệ thống: ${systemAmount}\n- Chênh lệch: ${actualTotal - systemAmount}\n- Lý do: ${reason}`,
+            `Kết toán hôm nay (${formatted}):\n- Số tiền thực tế: ${actualTotal}\n- Số tiền hệ thống: ${calculatedSystemAmount}\n- Chênh lệch: ${actualTotal - calculatedSystemAmount}\n- Lý do: ${reason}`,
         )
         res.status(201).json({
             success: true,
@@ -45,6 +68,18 @@ export const createDailyClosing = async (req: Request, res: Response) => {
             message: 'Error creating DailyClosing',
             error,
         })
+    }
+}
+export const getDailyClosingSummary = async (req: Request, res: Response) => {
+    try {
+        const summary = await loadDailyClosingSummary()
+        res.json({ success: true, data: summary })
+    } catch (error) {
+        if (error && typeof error === 'object' && 'code' in error && error.code === 11000) {
+            return res.status(400).json({ success: false, message: 'Today already has a DailyClosing record' })
+        }
+        console.error(error)
+        res.status(500).json({ success: false, message: 'Error fetching daily closing summary', error })
     }
 }
 export const getClosingOfYesterday = async (req: Request, res: Response) => {
