@@ -16,12 +16,23 @@ export async function ensureStoreCatalog(storeId: string): Promise<void> {
         items.map((item: any) => ({
             updateOne: {
                 filter: { storeId: storeObjectId, itemId: item._id },
-                update: { $setOnInsert: { storeId: storeObjectId, itemId: item._id, price: new Map<string, number>(), active: true } },
+                update: { $setOnInsert: { storeId: storeObjectId, itemId: item._id, price: new Map<string, number>(), permanentlyActive: true, temporarilyUnavailable: false, temporarilyUnavailableUntil: null } },
                 upsert: true,
             },
         })),
         { ordered: false },
     )
+}
+
+export async function migrateStoreItemAvailability(): Promise<void> {
+    await StoreItem.updateMany(
+        { active: { $exists: true } },
+        [{ $set: { permanentlyActive: { $ifNull: ['$active', true] }, temporarilyUnavailable: false, temporarilyUnavailableUntil: null } }],
+        { updatePipeline: true },
+    )
+    await StoreItem.updateMany({ active: { $exists: true } }, { $unset: { active: 1 } })
+    await StoreItem.updateMany({ permanentlyActive: { $exists: false } }, { $set: { permanentlyActive: true } })
+    await StoreItem.updateMany({ temporarilyUnavailable: { $exists: false } }, { $set: { temporarilyUnavailable: false } })
 }
 
 export async function ensureStoreAddons(storeId: string): Promise<void> {

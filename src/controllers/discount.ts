@@ -5,6 +5,7 @@ import User from '../models/user.js'
 import Store from '../models/store.js'
 import type { AuthRequest } from '../middlewares/auth.js'
 import { Role } from '../middlewares/auth.js'
+import { emitCatalogEventToStores, emitStoreEvent } from '../realtime.js'
 
 type DiscountNames = { vi: string; en: string; 'zh-TW': string }
 
@@ -72,6 +73,7 @@ export const createDiscount = async (req: Request, res: Response) => {
         const discount = await Discount.create({ names, type, note: req.body.note })
         await StoreDiscount.insertMany(storeIds.map((storeId) => ({ storeId, discountId: discount._id, amount, active: req.body.active !== false, startsAt: req.body.startsAt || undefined, endsAt: req.body.endsAt || undefined })))
         const config = await StoreDiscount.findOne({ storeId: storeIds[0]!, discountId: discount._id }).lean()
+        await emitCatalogEventToStores('catalog.changed', { entity: 'discount', discountId: String(discount._id), changedFields: ['created'] }, storeIds)
         res.status(201).json({ success: true, data: toResponse(discount, config, String(req.query.lang || 'vi')) })
     } catch (error: any) {
         res.status(error.statusCode || 500).json({ success: false, message: error.message })
@@ -112,6 +114,7 @@ export const updateDiscount = async (req: Request, res: Response) => {
         const amountError = validateAmount(type, amount)
         if (amountError) return res.status(400).json({ success: false, message: amountError })
         const config = await StoreDiscount.findOneAndUpdate({ storeId, discountId: discount._id }, { $set: { amount, ...(req.body.active !== undefined ? { active: req.body.active } : {}), ...(req.body.startsAt !== undefined ? { startsAt: req.body.startsAt || null } : {}), ...(req.body.endsAt !== undefined ? { endsAt: req.body.endsAt || null } : {}) } }, { upsert: true, returnDocument: 'after', includeResultMetadata: false }).lean()
+        emitStoreEvent(storeId, 'catalog.discount.updated', { discountId: String(discount._id), changedFields: ['definition', 'amount', 'active'] })
         res.json({ success: true, data: toResponse(discount, config, String(req.query.lang || 'vi')) })
     } catch (error: any) {
         res.status(error.statusCode || 500).json({ success: false, message: error.message })
@@ -127,6 +130,7 @@ export const updateStoreDiscount = async (req: Request, res: Response) => {
         const amountError = validateAmount(discount.type, amount)
         if (amountError) return res.status(400).json({ success: false, message: amountError })
         const config = await StoreDiscount.findOneAndUpdate({ storeId, discountId: discount._id }, { $set: { amount, ...(req.body.active !== undefined ? { active: req.body.active } : {}), ...(req.body.startsAt !== undefined ? { startsAt: req.body.startsAt || null } : {}), ...(req.body.endsAt !== undefined ? { endsAt: req.body.endsAt || null } : {}) } }, { upsert: true, returnDocument: 'after', includeResultMetadata: false }).lean()
+        emitStoreEvent(storeId, 'catalog.discount.updated', { discountId: String(discount._id), changedFields: ['amount', 'active'] })
         res.json({ success: true, data: toResponse(discount, config, String(req.query.lang || 'vi')) })
     } catch (error: any) {
         res.status(error.statusCode || 500).json({ success: false, message: error.message })
@@ -138,6 +142,7 @@ export const deleteDiscount = async (req: Request, res: Response) => {
         const discount = await Discount.findByIdAndDelete(req.params.id)
         if (!discount) return res.status(404).json({ success: false, message: 'Discount not found' })
         await StoreDiscount.deleteMany({ discountId: discount._id })
+        await emitCatalogEventToStores('catalog.changed', { entity: 'discount', discountId: String(req.params.id), changedFields: ['deleted'] })
         res.json({ success: true, message: 'Deleted successfully' })
     } catch (error: any) {
         res.status(500).json({ success: false, message: error.message })

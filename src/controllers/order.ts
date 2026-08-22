@@ -6,6 +6,7 @@ import { getPaidAt } from '../utils/orderPaymentCalculations.js'
 import { buildPaidOrderFilter } from '../utils/paidOrderFilters.js'
 import { assertFinancialPeriodOpen, FinancialPeriodClosedError } from '../services/financialPeriodLock.js'
 import type { AuthRequest } from '../middlewares/auth.js'
+import { emitStoreEvent } from '../realtime.js'
 
 export const getNextOrderNumber = async (req: Request, res: Response) => {
     try {
@@ -77,6 +78,7 @@ export const createOrder = async (req: Request, res: Response) => {
             if (!updated) {
                 return res.status(404).json({ success: false, message: 'Order not found' })
             }
+            emitStoreEvent(storeId, 'order.payment.updated', { orderId: String(updated._id), changedFields: ['status', 'paymentMethod'] })
             const nextNumber = await getNextNumber(storeId)
             return res.status(200).json({ success: true, data: nextNumber })
         }
@@ -111,6 +113,7 @@ export const createOrder = async (req: Request, res: Response) => {
         })
 
         await newOrder.save()
+        emitStoreEvent(storeId, 'order.created', { orderId: String(newOrder._id), source: newOrder.source })
 
         const nextNumber = await getNextNumber(storeId)
         return res.status(201).json({ success: true, data: nextNumber })
@@ -146,6 +149,8 @@ export const cancelOrder = async (req: Request, res: Response) => {
 
         const updated = await Order.findOneAndUpdate({ _id: id, storeId, version: req.body.version }, { $set: { status: 'cancelled' }, $inc: { version: 1 } }, { returnDocument: 'after', includeResultMetadata: false })
         if (!updated) return res.status(409).json({ success: false, code: 'ORDER_VERSION_CONFLICT', message: 'Order was changed by another device' })
+
+        emitStoreEvent(storeId, 'order.cancelled', { orderId: String(updated._id), changedFields: ['status'] })
 
         res.json({
             success: true,
@@ -226,6 +231,8 @@ export const updateOrderStatus = async (req: Request, res: Response) => {
         )
         if (!updated) return res.status(409).json({ success: false, code: 'ORDER_VERSION_CONFLICT', message: 'Order was changed by another device' })
 
+        emitStoreEvent(storeId, 'order.updated', { orderId: String(updated._id), changedFields: ['status'] })
+
         res.json({
             success: true,
             data: updated,
@@ -251,6 +258,8 @@ export const updateOrderPayment = async (req: Request, res: Response) => {
         if (order.paidAt) await assertFinancialPeriodOpen(storeId, order.paidAt)
         const updated = await Order.findOneAndUpdate({ _id: id, storeId, version }, { $set: { paymentMethod }, $inc: { version: 1 } }, { returnDocument: 'after', includeResultMetadata: false })
         if (!updated) return res.status(409).json({ success: false, code: 'ORDER_VERSION_CONFLICT', message: 'Order was changed by another device' })
+
+        emitStoreEvent(storeId, 'order.payment.updated', { orderId: String(updated._id), changedFields: ['paymentMethod'] })
 
         res.json({
             success: true,

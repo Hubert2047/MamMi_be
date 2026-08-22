@@ -1,5 +1,6 @@
 import type { Request, Response } from 'express'
 import Category from '../models/category.js'
+import { emitCatalogEventToStores } from '../realtime.js'
 
 export type CategoryNames = { vi: string; en: string; 'zh-TW': string }
 
@@ -59,6 +60,7 @@ export const createCategory = async (req: Request, res: Response) => {
         }
         const category = new Category({ names })
         await category.save()
+        await emitCatalogEventToStores('catalog.changed', { entity: 'category', categoryId: String(category._id), changedFields: ['created'] })
         res.status(201).json({ success: true, data: category })
     } catch (error: any) {
         if (error?.code === 11000) return res.status(409).json({ success: false, message: duplicateCategoryError(error) })
@@ -79,6 +81,7 @@ export const updateCategory = async (req: any, res: any) => {
         const names = getCategoryNames(req.body.names)
         if (!names) return res.status(400).json({ success: false, message: 'All category names are required' })
         const updated = await Category.findByIdAndUpdate(id, { $set: { names }, $unset: { name: 1 } }, { returnDocument: 'after', runValidators: true })
+        if (updated) await emitCatalogEventToStores('catalog.changed', { entity: 'category', categoryId: String(id), changedFields: ['names'] })
         res.json({ success: true, data: updated })
     } catch (error: any) {
         if (error?.code === 11000) return res.status(409).json({ success: false, message: duplicateCategoryError(error) })
@@ -90,6 +93,7 @@ export const deleteCategory = async (req: Request, res: Response) => {
     try {
         const { id } = req.params
         await Category.findByIdAndDelete(id)
+        await emitCatalogEventToStores('catalog.changed', { entity: 'category', categoryId: String(id), changedFields: ['deleted'] })
         res.json({ success: true, message: 'Category deleted' })
     } catch (error) {
         res.status(400).json({ success: false, message: 'Error deleting category', error })

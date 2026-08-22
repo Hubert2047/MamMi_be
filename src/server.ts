@@ -1,5 +1,6 @@
 import bodyParser from 'body-parser'
 import dotenv from 'dotenv'
+import { createServer } from 'node:http'
 import type { Application } from 'express'
 import express from 'express'
 import { connectDB } from './config/db.js'
@@ -25,7 +26,8 @@ import { ensureDefaultUsers } from './controllers/auth.js'
 import Store from './models/store.js'
 import store from './routers/store.js'
 import user from './routers/user.js'
-import { ensureStoreAddons, ensureStoreCatalog, ensureStoreScopedFinancialData } from './services/storeCatalogMigration.js'
+import { ensureStoreAddons, ensureStoreCatalog, ensureStoreScopedFinancialData, migrateStoreItemAvailability } from './services/storeCatalogMigration.js'
+import { initializeRealtime } from './realtime.js'
 dotenv.config()
 
 
@@ -33,6 +35,7 @@ const app: Application = express()
 ;(async () => {
     await connectDB()
     await ensureDefaultUsers()
+    await migrateStoreItemAvailability()
     const defaultStore = await Store.findOne({ code: 'main' }).select({ _id: 1 }).lean()
     if (defaultStore) {
         await ensureStoreCatalog(defaultStore._id.toString())
@@ -66,7 +69,9 @@ const app: Application = express()
     app.use('/api/employee', employee)
     app.use('/api/shift-attendance', shiftAttendance)
     
-    app.listen(port, () => {
+    const httpServer = createServer(app)
+    initializeRealtime(httpServer, process.env.FRONTEND_URL || 'http://localhost:3000')
+    httpServer.listen(port, () => {
         console.log(`Server is Fire at http://localhost:${port}`)
     })
 })()

@@ -5,6 +5,10 @@ import mongoose from 'mongoose'
 import StoreItem from '../models/store-item.js'
 import StoreAddon from '../models/store-addon.js'
 import type { AuthRequest } from '../middlewares/auth.js'
+import Store from '../models/store.js'
+import { Role } from '../constants/role.js'
+import { nextStoreMidnight } from '../utils/storeAvailability.js'
+import { emitCatalogEventToStores, emitStoreEvent } from '../realtime.js'
 
 const optionLabel = (value: string) => value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'option'
 const normalizeNames = (value: unknown) => {
@@ -38,6 +42,19 @@ const toCatalogItem = (item: any, language: string) => ({
     categoryName: item.categoryId?.names?.[language] || item.categoryId?.names?.vi || item.categoryId?.name || '',
 })
 
+const clearExpiredTemporaryAvailability = async (storeId: string) => {
+    const result = await StoreItem.updateMany(
+        { storeId, temporarilyUnavailable: true, temporarilyUnavailableUntil: { $lte: new Date() } },
+        { $set: { temporarilyUnavailable: false }, $unset: { temporarilyUnavailableUntil: 1 } },
+    )
+    if (result.modifiedCount > 0) emitStoreEvent(storeId, 'catalog.store-item.availability.updated', { reason: 'temporary-availability-expired' })
+}
+
+const getStoreTimeZone = async (storeId: string) => {
+    const store = await Store.findById(storeId).select({ timezone: 1 }).lean()
+    return store?.timezone || 'Asia/Taipei'
+}
+
 export const getCatalogItems = async (req: Request, res: Response) => {
     try {
         const language = typeof req.query.lang === 'string' ? req.query.lang : 'vi'
@@ -53,6 +70,7 @@ export const createCatalogItem = async (req: Request, res: Response) => {
         const description = req.body.description === undefined ? undefined : normalizeNames(req.body.description)
         const { price: _price, active: _active, ...data } = req.body
         const item = await Item.create({ ...data, names, ...(description ? { description } : {}), variants: normalizeOptions(req.body.variants, 'variant'), noteOptions: normalizeOptions(req.body.noteOptions, 'note') })
+        await emitCatalogEventToStores('catalog.item.updated', { itemId: String(item._id), changedFields: ['created'] })
         res.status(201).json({ success: true, data: item })
     } catch (error) { res.status(400).json({ success: false, message: 'Error creating catalog item', error }) }
 }
@@ -66,6 +84,7 @@ export const updateCatalogItem = async (req: Request, res: Response) => {
         const { price: _price, active: _active, ...data } = req.body
         const item = await Item.findByIdAndUpdate(id, { ...data, ...(names ? { names } : {}), ...(description ? { description } : {}), ...(req.body.variants ? { variants: normalizeOptions(req.body.variants, 'variant') } : {}), ...(req.body.noteOptions ? { noteOptions: normalizeOptions(req.body.noteOptions, 'note') } : {}) }, { returnDocument: 'after', runValidators: true })
         if (!item) return res.status(404).json({ success: false, message: 'Catalog item not found' })
+        await emitCatalogEventToStores('catalog.item.updated', { itemId: id, changedFields: Object.keys(req.body) })
         res.json({ success: true, data: item })
     } catch (error) { res.status(400).json({ success: false, message: 'Error updating catalog item', error }) }
 }
@@ -76,6 +95,7 @@ export const deleteCatalogItem = async (req: Request, res: Response) => {
         if (await StoreItem.exists({ itemId: id })) return res.status(409).json({ success: false, message: 'Remove this product from every store menu before deleting it' })
         const item = await Item.findByIdAndDelete(id)
         if (!item) return res.status(404).json({ success: false, message: 'Catalog item not found' })
+        await emitCatalogEventToStores('catalog.item.updated', { itemId: id, changedFields: ['deleted'] })
         res.json({ success: true, data: item })
     } catch (error) { res.status(400).json({ success: false, message: 'Error deleting catalog item', error }) }
 }
@@ -83,9 +103,10 @@ export const deleteCatalogItem = async (req: Request, res: Response) => {
 export const addStoreItem = async (req: Request, res: Response) => {
     try {
         const storeId = (req as AuthRequest).user.storeId
-        const { itemId, price = {}, active = true } = req.body
+        const { itemId, price = {} } = req.body
         if (!await Item.exists({ _id: itemId })) return res.status(404).json({ success: false, message: 'Catalog item not found' })
-        const storeItem = await StoreItem.findOneAndUpdate({ storeId, itemId }, { $set: { price, active } }, { upsert: true, returnDocument: 'after', includeResultMetadata: false })
+        const storeItem = await StoreItem.findOneAndUpdate({ storeId, itemId }, { $set: { price }, $setOnInsert: { permanentlyActive: true, temporarilyUnavailable: false, temporarilyUnavailableUntil: null } }, { upsert: true, returnDocument: 'after', includeResultMetadata: false })
+        emitStoreEvent(storeId, 'catalog.store-item.price.updated', { itemId: String(itemId), changedFields: ['price'] })
         res.status(201).json({ success: true, data: storeItem })
     } catch (error) { res.status(400).json({ success: false, message: 'Error adding store item', error }) }
 }
@@ -94,19 +115,57 @@ export const updateStoreItem = async (req: Request, res: Response) => {
     try {
         const storeId = (req as AuthRequest).user.storeId
         const itemId = String(req.params.itemId)
-        const storeItem = await StoreItem.findOneAndUpdate({ storeId, itemId }, { $set: { ...(req.body.price !== undefined ? { price: req.body.price } : {}), ...(req.body.active !== undefined ? { active: req.body.active } : {}) } }, { returnDocument: 'after', includeResultMetadata: false })
+        const authUser = (req as AuthRequest).user
+        if (req.body.permanentlyActive !== undefined && ![Role.Admin, Role.SuperAdmin].includes(authUser.role)) {
+            return res.status(403).json({ success: false, message: 'Only Admin or SuperAdmin can change permanent availability' })
+        }
+        await clearExpiredTemporaryAvailability(storeId)
+        const set: Record<string, unknown> = {}
+        if (req.body.price !== undefined) set.price = req.body.price
+        if (req.body.permanentlyActive !== undefined) set.permanentlyActive = Boolean(req.body.permanentlyActive)
+        if (req.body.temporarilyUnavailable !== undefined) {
+            const unavailable = Boolean(req.body.temporarilyUnavailable)
+            set.temporarilyUnavailable = unavailable
+            if (unavailable) set.temporarilyUnavailableUntil = nextStoreMidnight(new Date(), await getStoreTimeZone(storeId))
+        }
+        const update: Record<string, unknown> = { $set: set }
+        if (req.body.temporarilyUnavailable === false) update.$unset = { temporarilyUnavailableUntil: 1 }
+        const storeItem = await StoreItem.findOneAndUpdate({ storeId, itemId }, update, { returnDocument: 'after', includeResultMetadata: false })
         if (!storeItem) return res.status(404).json({ success: false, message: 'Item not found in this store' })
+        const event = Object.prototype.hasOwnProperty.call(set, 'price') && Object.keys(set).length === 1
+            ? 'catalog.store-item.price.updated'
+            : 'catalog.store-item.availability.updated'
+        emitStoreEvent(storeId, event, { itemId, changedFields: Object.keys(set) })
         res.json({ success: true, data: storeItem })
     } catch (error) { res.status(400).json({ success: false, message: 'Error updating store item', error }) }
 }
 
+export const updateTemporaryStoreItemAvailability = async (req: Request, res: Response) => {
+    try {
+        const storeId = (req as AuthRequest).user.storeId
+        const unavailable = Boolean(req.body.temporarilyUnavailable)
+        await clearExpiredTemporaryAvailability(storeId)
+        const update: Record<string, unknown> = { $set: { temporarilyUnavailable: unavailable } }
+        if (unavailable) update.$set = { temporarilyUnavailable: true, temporarilyUnavailableUntil: nextStoreMidnight(new Date(), await getStoreTimeZone(storeId)) }
+        else update.$unset = { temporarilyUnavailableUntil: 1 }
+        const storeItem = await StoreItem.findOneAndUpdate({ storeId, itemId: String(req.params.itemId) }, update, { returnDocument: 'after', includeResultMetadata: false })
+        if (!storeItem) return res.status(404).json({ success: false, message: 'Item not found in this store' })
+        emitStoreEvent(storeId, 'catalog.store-item.availability.updated', { itemId: String(req.params.itemId), changedFields: ['temporarilyUnavailable'] })
+        res.json({ success: true, data: storeItem })
+    } catch (error) { res.status(400).json({ success: false, message: 'Error updating temporary availability', error }) }
+}
+
 export const getItems = async (req: Request, res: Response) => {
     try {
-        const { active } = req.query
+        const { available } = req.query
         const language = typeof req.query.lang === 'string' ? req.query.lang : 'vi'
         const storeId = (req as AuthRequest).user.storeId
+        await clearExpiredTemporaryAvailability(storeId)
         const storeFilter: any = { storeId }
-        if (active !== undefined) storeFilter.active = active === 'true'
+        if (available === 'true') {
+            storeFilter.permanentlyActive = true
+            storeFilter.temporarilyUnavailable = false
+        }
         const storeItems = await StoreItem.find(storeFilter).populate({
             path: 'itemId',
             populate: [
@@ -123,7 +182,9 @@ export const getItems = async (req: Request, res: Response) => {
             return ({
             ...item,
             price: storeItem.price,
-            active: storeItem.active,
+            permanentlyActive: storeItem.permanentlyActive !== false,
+            temporarilyUnavailable: storeItem.temporarilyUnavailable === true,
+            temporarilyUnavailableUntil: storeItem.temporarilyUnavailableUntil || null,
             variants: normalizeOptions(item.variants, 'variant'),
             noteOptions: normalizeOptions(item.noteOptions, 'note'),
             name: item.names?.[language] || item.names?.vi || Object.values(item.names || {})[0] || '',
@@ -171,7 +232,7 @@ export const getItemById = async (req: Request, res: Response) => {
         if (!item) {
             return res.status(404).json({ success: false, message: 'Item not found' })
         }
-        res.json({ success: true, data: { ...item.toObject(), price: storeItem.price, active: storeItem.active } })
+        res.json({ success: true, data: { ...item.toObject(), price: storeItem.price, permanentlyActive: storeItem.permanentlyActive, temporarilyUnavailable: storeItem.temporarilyUnavailable, temporarilyUnavailableUntil: storeItem.temporarilyUnavailableUntil || null } })
     } catch (error) {
         res.status(500).json({ success: false, message: 'Error fetching item', error })
     }
@@ -182,12 +243,14 @@ export const createItem = async (req: Request, res: Response) => {
         const names = normalizeNames(req.body.names)
         if (!names) return res.status(400).json({ success: false, message: 'At least one product name is required' })
         const description = req.body.description === undefined ? undefined : normalizeNames(req.body.description)
-        const { price = {}, active = true, ...itemData } = req.body
+        const { price = {}, ...itemData } = req.body
         const item = new Item({ ...itemData, names, ...(description ? { description } : {}), variants: normalizeOptions(req.body.variants, 'variant'), noteOptions: normalizeOptions(req.body.noteOptions, 'note') })
         await item.save()
         const storeId = (req as AuthRequest).user.storeId
-        await StoreItem.create({ storeId, itemId: item._id, price, active })
-        res.status(201).json({ success: true, data: { ...item.toObject(), price, active } })
+        await StoreItem.create({ storeId, itemId: item._id, price, permanentlyActive: true, temporarilyUnavailable: false })
+        await emitCatalogEventToStores('catalog.item.updated', { itemId: String(item._id), changedFields: ['created'] })
+        emitStoreEvent(storeId, 'catalog.store-item.price.updated', { itemId: String(item._id), changedFields: ['price'] })
+        res.status(201).json({ success: true, data: { ...item.toObject(), price, permanentlyActive: true, temporarilyUnavailable: false } })
     } catch (error) {
         res.status(400).json({ success: false, message: 'Error creating item', error })
     }
@@ -201,7 +264,6 @@ export const serverCreateItem = async (data: {
     addons: string[]
     categoryId: string
     noteOptions: LocalizedOption[] | string[]
-    active: boolean
 }) => {
     try {
         const existing = await Item.findOne({ 'names.vi': data.names.vi })
@@ -218,7 +280,6 @@ export const serverCreateItem = async (data: {
             addons: addonsIds,
             categoryId: new mongoose.Types.ObjectId(data.categoryId),
             noteOptions: normalizeOptions(data.noteOptions, 'note'),
-            active: data.active,
         })
         await item.save()
         console.log(`Item "${data.names.vi}" đã được tạo thành công.`)
@@ -254,12 +315,14 @@ export const updateItem = async (req: Request, res: Response) => {
         const names = req.body.names === undefined ? undefined : normalizeNames(req.body.names)
         if (req.body.names !== undefined && !names) return res.status(400).json({ success: false, message: 'At least one product name is required' })
         const description = req.body.description === undefined ? undefined : normalizeNames(req.body.description)
-        const { price, active, ...itemData } = req.body
+        const { price, ...itemData } = req.body
         const updated = await Item.findByIdAndUpdate(id, { ...itemData, ...(names ? { names } : {}), ...(description ? { description } : req.body.description !== undefined ? { description: {} } : {}), ...(req.body.variants ? { variants: normalizeOptions(req.body.variants, 'variant') } : {}), ...(req.body.noteOptions ? { noteOptions: normalizeOptions(req.body.noteOptions, 'note') } : {}) }, { returnDocument: 'after', runValidators: true })
         const storeId = (req as AuthRequest).user.storeId
-        const storeItem = await StoreItem.findOneAndUpdate({ storeId, itemId: id }, { $set: { ...(price !== undefined ? { price } : {}), ...(active !== undefined ? { active } : {}) } }, { returnDocument: 'after', includeResultMetadata: false })
+        const storeItem = await StoreItem.findOneAndUpdate({ storeId, itemId: id }, { $set: { ...(price !== undefined ? { price } : {}) } }, { returnDocument: 'after', includeResultMetadata: false })
         if (!updated || !storeItem) return res.status(404).json({ success: false, message: 'Item not found in this store' })
-        res.json({ success: true, data: { ...updated.toObject(), price: storeItem.price, active: storeItem.active } })
+        await emitCatalogEventToStores('catalog.item.updated', { itemId: id, changedFields: Object.keys(itemData) })
+        if (price !== undefined) emitStoreEvent(storeId, 'catalog.store-item.price.updated', { itemId: id, changedFields: ['price'] })
+        res.json({ success: true, data: { ...updated.toObject(), price: storeItem.price, permanentlyActive: storeItem.permanentlyActive, temporarilyUnavailable: storeItem.temporarilyUnavailable } })
     } catch (error) {
         res.status(400).json({ success: false, message: 'Error updating item', error })
     }
@@ -269,8 +332,9 @@ export const deleteItem = async (req: Request, res: Response) => {
     try {
         const id = String(req.params.id)
         const storeId = (req as AuthRequest).user.storeId
-        const updated = await StoreItem.findOneAndUpdate({ storeId, itemId: id }, { $set: { active: false } })
+        const updated = await StoreItem.findOneAndUpdate({ storeId, itemId: id }, { $set: { permanentlyActive: false } })
         if (!updated) return res.status(404).json({ success: false, message: 'Item not found in this store' })
+        emitStoreEvent(storeId, 'catalog.store-item.availability.updated', { itemId: id, changedFields: ['permanentlyActive'] })
         res.json({ success: true, message: 'Item deleted' })
     } catch (error) {
         res.status(400).json({ success: false, message: 'Error deleting item', error })

@@ -7,6 +7,7 @@ import { format } from 'date-fns'
 import { calculateActualCash, canVoidLatestClosing, isValidCashData, requiresClosingReason } from '../utils/dailyClosingCalculations.js'
 import { getDailyClosingSummary as loadDailyClosingSummary } from '../services/dailyClosingSummary.js'
 import type { AuthRequest } from '../middlewares/auth.js'
+import { emitStoreEvent } from '../realtime.js'
 
 export const createDailyClosing = async (req: Request, res: Response) => {
     try {
@@ -48,6 +49,7 @@ export const createDailyClosing = async (req: Request, res: Response) => {
             confirmedBy: (req as AuthRequest).user?.account,
         })
         await dailyClosing.save()
+        emitStoreEvent(storeId, 'closing.created', { closingId: String(dailyClosing._id), periodStart: dailyClosing.periodStart, periodEnd: dailyClosing.periodEnd })
         const now = toZonedTime(new Date(), TIME_ZONE)
         const formatted = format(now, 'dd/MM/yyyy HH:mm')
         sendMessageToGroup(
@@ -97,6 +99,7 @@ export const voidDailyClosing = async (req: Request, res: Response) => {
             { status: 'voided', voidedAt: new Date(), voidedBy: (req as AuthRequest).user.account, voidReason: reason.trim() },
         )
         if (result.modifiedCount !== 1) return res.status(409).json({ success: false, message: 'DailyClosing changed before it was voided' })
+        emitStoreEvent(storeId, 'closing.voided', { closingId: id })
         return res.json({ success: true, data: await DailyClosing.findOne({ _id: id, storeId }) })
     } catch (error) {
         console.error(error)
