@@ -1,19 +1,7 @@
 import type { Request, Response } from 'express'
-import Order, { type IOrder } from '../models/order.js'
+import Order from '../models/order.js'
 import { getFromDayUntilNow, getFullDay } from '../utils/index.js'
-const calculateTotal = (order: IOrder) => {
-    const total = order.items.reduce((sum, i) => {
-        const item = i.basePrice * i.quantity
-        const addon = i.addons.reduce((sum, a) => sum + a.amount * a.priceExtra, 0)
-        return sum + item + addon
-    }, 0)
-    if (!order.discount) return total
-    if (order.discount.type === 'percent') {
-        const percent = order.discount.amount / 100
-        return total * (1 - percent)
-    }
-    return total - order.discount.amount
-}
+import { calculateTotal } from '../utils/orderCalculations.js'
 
 export const getNextOrderNumber = async (req: Request, res: Response) => {
     try {
@@ -104,7 +92,7 @@ export const createOrder = async (req: Request, res: Response) => {
             note: item.note,
         }))
 
-        const totalPrice = calculateTotal(order)
+        const totalPrice = calculateTotal(normalizedItems, order.discount)
 
         const newOrder = new Order({
             number: order.number,
