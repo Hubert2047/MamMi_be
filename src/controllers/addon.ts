@@ -1,5 +1,7 @@
 import type { Request, Response } from 'express'
 import AddonModel from '../models/addon.js'
+import StoreAddon from '../models/store-addon.js'
+import type { AuthRequest } from '../middlewares/auth.js'
 
 export type AddonNames = { vi: string; en: string; 'zh-TW': string }
 
@@ -18,6 +20,35 @@ const toResponseAddon = (addon: any, language = 'vi') => {
     const legacyName = addon.name || ''
     const names = addon.names || { vi: legacyName, en: legacyName, 'zh-TW': legacyName }
     return { ...addon, names, name: names[language] || names.vi || names.en || names['zh-TW'] || legacyName }
+}
+
+export const getStoreAddons = async (req: Request, res: Response) => {
+    try {
+        const storeId = (req as AuthRequest).user.storeId
+        const language = typeof req.query.lang === 'string' ? req.query.lang : 'vi'
+        const storeAddons = await StoreAddon.find({ storeId }).populate('addonId').lean()
+        res.json(storeAddons.filter((entry: any) => entry.addonId).map((entry: any) => ({ ...toResponseAddon(entry.addonId, language), priceExtra: entry.priceExtra, active: entry.active })))
+    } catch (err) { res.status(500).json({ message: 'Server error', error: err }) }
+}
+
+export const addStoreAddon = async (req: Request, res: Response) => {
+    try {
+        const storeId = (req as AuthRequest).user.storeId
+        const { addonId, priceExtra = 0, active = true } = req.body
+        if (!await AddonModel.exists({ _id: addonId })) return res.status(404).json({ message: 'Addon not found' })
+        const storeAddon = await StoreAddon.findOneAndUpdate({ storeId, addonId }, { $set: { priceExtra, active } }, { upsert: true, returnDocument: 'after', includeResultMetadata: false })
+        res.status(201).json(storeAddon)
+    } catch (err) { res.status(400).json({ message: 'Invalid data', error: err }) }
+}
+
+export const updateStoreAddon = async (req: Request, res: Response) => {
+    try {
+        const storeId = (req as AuthRequest).user.storeId
+        const addonId = String(req.params.addonId)
+        const storeAddon = await StoreAddon.findOneAndUpdate({ storeId, addonId }, { $set: { ...(req.body.priceExtra !== undefined ? { priceExtra: Number(req.body.priceExtra) } : {}), ...(req.body.active !== undefined ? { active: req.body.active } : {}) } }, { returnDocument: 'after', includeResultMetadata: false })
+        if (!storeAddon) return res.status(404).json({ message: 'Addon not found in this store' })
+        res.json(storeAddon)
+    } catch (err) { res.status(400).json({ message: 'Invalid data', error: err }) }
 }
 
 // Get all addons

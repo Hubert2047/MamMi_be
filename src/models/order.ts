@@ -29,6 +29,7 @@ interface Customer {
     phone: string
 }
 export interface IOrder extends Document {
+    storeId: mongoose.Types.ObjectId
     number: number
     items: OrderItem[]
     totalPrice: number
@@ -38,6 +39,9 @@ export interface IOrder extends Document {
     discount?: OrderDiscount
     paymentMethod: string
     customer: Customer | null
+    source: 'pos' | 'qr' | 'uber' | 'foodpanda'
+    externalOrderId?: string
+    version: number
 }
 const CustomerSchema = new Schema<Customer>(
     {
@@ -84,6 +88,7 @@ const OrderItemSchema = new Schema<OrderItem>(
 
 const OrderSchema = new Schema<IOrder>(
     {
+        storeId: { type: Schema.Types.ObjectId, ref: 'Store', required: true },
         number: { type: Number, required: true },
         items: [OrderItemSchema],
         totalPrice: { type: Number, required: true },
@@ -111,12 +116,17 @@ const OrderSchema = new Schema<IOrder>(
             type: CustomerSchema,
             default: null,
         },
+        source: { type: String, enum: ['pos', 'qr', 'uber', 'foodpanda'], default: 'pos', required: true },
+        externalOrderId: String,
+        version: { type: Number, default: 1, required: true },
     },
     { timestamps: true },
 )
 
-OrderSchema.index({ createdAt: 1, status: 1, paymentMethod: 1 })
-OrderSchema.index({ paidAt: 1, status: 1, paymentMethod: 1 })
-OrderSchema.index({ createdAt: 1, number: -1 })
+OrderSchema.index({ storeId: 1, createdAt: -1 })
+OrderSchema.index({ storeId: 1, status: 1, createdAt: -1 })
+OrderSchema.index({ storeId: 1, status: 1, paidAt: -1 })
+OrderSchema.index({ storeId: 1, number: 1 }, { unique: true })
+OrderSchema.index({ storeId: 1, source: 1, externalOrderId: 1 }, { unique: true, sparse: true })
 
 export default mongoose.model<IOrder>('Order', OrderSchema)

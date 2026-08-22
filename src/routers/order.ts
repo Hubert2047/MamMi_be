@@ -15,7 +15,7 @@ const router = Router();
 
 router.post("/",authenticateToken, createOrder);
 router.get("/", authenticateToken, getOrders);
-router.get("/next-order-number", getNextOrderNumber);
+router.get("/next-order-number", authenticateToken, getNextOrderNumber);
 router.get("/sales-by-payment", authenticateToken, getSalesByPaymentMethod);
 router.put("/payment/:id", authenticateToken, updateOrderPayment);   
 router.get("/:id", authenticateToken, getOrderById);

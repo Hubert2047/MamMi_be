@@ -2,10 +2,11 @@ import type { Request, Response } from 'express'
 import Revenue from '../models/revenue.js'
 import { getFromDayUntilNow } from '../utils/index.js'
 import { assertFinancialPeriodOpen, FinancialPeriodClosedError } from '../services/financialPeriodLock.js'
+import type { AuthRequest } from '../middlewares/auth.js'
 export const createRevenue = async (req: Request, res: Response) => {
     try {
         const { name, price, note } = req.body
-        const revenue = new Revenue({ name, price, note })
+        const revenue = new Revenue({ storeId: (req as AuthRequest).user.storeId, name, price, note })
         await revenue.save()
         res.status(201).json({ success: true, data: revenue })
     } catch (error) {
@@ -16,7 +17,8 @@ export const createRevenue = async (req: Request, res: Response) => {
 export const getRevenues = async (req: Request, res: Response) => {
     try {
         const { days } = req.query
-        const filter: any = {}
+        const storeId = (req as AuthRequest).user.storeId
+        const filter: any = { storeId }
         if (days) {
             const daysNumber = Number(days)
             const { start } = getFromDayUntilNow(daysNumber)
@@ -34,12 +36,13 @@ export const getRevenues = async (req: Request, res: Response) => {
 }
 export const deleteRevenue = async (req: Request, res: Response) => {
     try {
-        const { id } = req.params
-        const revenue = await Revenue.findById(id).select({ createdAt: 1 }).lean()
+        const id = String(req.params.id)
+        const storeId = (req as AuthRequest).user.storeId
+        const revenue = await Revenue.findOne({ _id: id, storeId }).select({ createdAt: 1 }).lean()
         if (!revenue) return res.status(404).json({ success: false, message: 'Revenue not found' })
-        await assertFinancialPeriodOpen(revenue.createdAt)
+        await assertFinancialPeriodOpen(storeId, revenue.createdAt)
 
-        const deletedRevenue = await Revenue.findByIdAndDelete(id)
+        const deletedRevenue = await Revenue.findOneAndDelete({ _id: id, storeId })
 
         if (!deletedRevenue) {
             return res.status(404).json({
@@ -67,7 +70,8 @@ export const deleteRevenue = async (req: Request, res: Response) => {
 
 export const updateRevenue = async (req: Request, res: Response) => {
     try {
-        const { id } = req.params
+        const id = String(req.params.id)
+        const storeId = (req as AuthRequest).user.storeId
         const data = req.body
         if (!id) {
             return res.status(400).json({
@@ -75,12 +79,12 @@ export const updateRevenue = async (req: Request, res: Response) => {
                 message: 'Thiếu id',
             })
         }
-        const revenue = await Revenue.findById(id).select({ createdAt: 1 }).lean()
+        const revenue = await Revenue.findOne({ _id: id, storeId }).select({ createdAt: 1 }).lean()
         if (!revenue) return res.status(404).json({ success: false, message: 'Revenue not found' })
-        await assertFinancialPeriodOpen(revenue.createdAt)
+        await assertFinancialPeriodOpen(storeId, revenue.createdAt)
 
-        const updated = await Revenue.findByIdAndUpdate(
-            id,
+        const updated = await Revenue.findOneAndUpdate(
+            { _id: id, storeId },
             {
                 ...data,
                 price: Number(data.price),

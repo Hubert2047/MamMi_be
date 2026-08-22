@@ -5,10 +5,11 @@ import { calculateTotal } from '../utils/orderCalculations.js'
 import { getPaidAt } from '../utils/orderPaymentCalculations.js'
 import { buildPaidOrderFilter } from '../utils/paidOrderFilters.js'
 import { assertFinancialPeriodOpen, FinancialPeriodClosedError } from '../services/financialPeriodLock.js'
+import type { AuthRequest } from '../middlewares/auth.js'
 
 export const getNextOrderNumber = async (req: Request, res: Response) => {
     try {
-        const nextNumber = await getNextNumber()
+        const nextNumber = await getNextNumber((req as AuthRequest).user.storeId)
         res.json({ success: true, nextNumber })
     } catch (err) {
         res.status(500).json({ success: false, message: 'Failed to get next number', error: err })
@@ -20,7 +21,7 @@ export const getSalesByPaymentMethod = async (req: Request, res: Response) => {
         const { start, end } = getFullDay(0)
         const result = await Order.aggregate([
             {
-                $match: buildPaidOrderFilter(start, end),
+                $match: { ...buildPaidOrderFilter(start, end), storeId: (req as AuthRequest).user.storeId },
             },
             {
                 $group: {
@@ -50,10 +51,9 @@ export const getSalesByPaymentMethod = async (req: Request, res: Response) => {
     }
 }
 
-export const getNextNumber = async () => {
-    const { start, end } = getFullDay(0)
+export const getNextNumber = async (storeId: string) => {
     const lastOrder = await Order.findOne({
-        createdAt: { $gte: start, $lte: end },
+        storeId,
     }).sort({ number: -1 })
 
     return lastOrder ? lastOrder.number + 1 : 1
@@ -62,6 +62,7 @@ export const getNextNumber = async () => {
 export const createOrder = async (req: Request, res: Response) => {
     try {
         const order = req.body
+        const storeId = (req as AuthRequest).user.storeId
 
         if (!order.items || order.items.length === 0) {
             return res.status(400).json({ success: false, message: 'Items is required' })
@@ -69,14 +70,14 @@ export const createOrder = async (req: Request, res: Response) => {
 
         if (order.checkoutPending && order._id) {
             const updated = await Order.findByIdAndUpdate(
-                order._id,
-                { status: 'paid', paymentMethod: order.paymentMethod, paidAt: getPaidAt('paid') },
+                { _id: order._id, storeId, version: order.version },
+                { $set: { status: 'paid', paymentMethod: order.paymentMethod, paidAt: getPaidAt('paid') }, $inc: { version: 1 } },
                 { returnDocument: 'after' },
             )
             if (!updated) {
                 return res.status(404).json({ success: false, message: 'Order not found' })
             }
-            const nextNumber = await getNextNumber()
+            const nextNumber = await getNextNumber(storeId)
             return res.status(200).json({ success: true, data: nextNumber })
         }
 
@@ -96,6 +97,7 @@ export const createOrder = async (req: Request, res: Response) => {
 
         const newOrder = new Order({
             number: order.number,
+            storeId,
             items: normalizedItems,
             totalPrice,
             status: order.status,
@@ -103,12 +105,14 @@ export const createOrder = async (req: Request, res: Response) => {
             paymentMethod: order.paymentMethod,
             discount: order.discount,
             customer: order.customer,
+            source: order.source || 'pos',
+            externalOrderId: order.externalOrderId,
             paidAt: getPaidAt(order.status),
         })
 
         await newOrder.save()
 
-        const nextNumber = await getNextNumber()
+        const nextNumber = await getNextNumber(storeId)
         return res.status(201).json({ success: true, data: nextNumber })
     } catch (error) {
         console.error('Error creating order:', error)
@@ -117,13 +121,15 @@ export const createOrder = async (req: Request, res: Response) => {
 }
 export const cancelOrder = async (req: Request, res: Response) => {
     try {
-        const { id } = req.params
+        const id = String(req.params.id)
 
-        const order = await Order.findById(id)
+        const storeId = (req as AuthRequest).user.storeId
+        const order = await Order.findOne({ _id: id, storeId })
 
         if (!order) {
             return res.status(404).json({
                 success: false,
+                code: 'ORDER_NOT_FOUND',
                 message: 'Order not found',
             })
         }
@@ -131,13 +137,15 @@ export const cancelOrder = async (req: Request, res: Response) => {
         if (order.status === 'cancelled') {
             return res.status(400).json({
                 success: false,
+                code: 'ORDER_ALREADY_CANCELLED',
                 message: 'Order is already cancelled',
             })
         }
 
-        if (order.paidAt) await assertFinancialPeriodOpen(order.paidAt)
+        if (order.paidAt) await assertFinancialPeriodOpen(storeId, order.paidAt)
 
-        const updated = await Order.findByIdAndUpdate(id, { status: 'cancelled' }, { returnDocument: 'after' })
+        const updated = await Order.findOneAndUpdate({ _id: id, storeId, version: req.body.version }, { $set: { status: 'cancelled' }, $inc: { version: 1 } }, { returnDocument: 'after', includeResultMetadata: false })
+        if (!updated) return res.status(409).json({ success: false, code: 'ORDER_VERSION_CONFLICT', message: 'Order was changed by another device' })
 
         res.json({
             success: true,
@@ -145,7 +153,7 @@ export const cancelOrder = async (req: Request, res: Response) => {
         })
     } catch (error) {
         if (error instanceof FinancialPeriodClosedError) {
-            return res.status(error.statusCode).json({ success: false, message: error.message })
+            return res.status(error.statusCode).json({ success: false, code: error.code, message: 'Order belongs to a confirmed closing period and cannot be changed' })
         }
         res.status(500).json({
             success: false,
@@ -158,7 +166,7 @@ export const cancelOrder = async (req: Request, res: Response) => {
 export const getOrders = async (req: Request, res: Response) => {
     try {
         const { days } = req.query
-        const filter: any = {}
+        const filter: any = { storeId: (req as AuthRequest).user.storeId }
         if (days) {
             const daysNumber = Number(days)
             const { start } = getFromDayUntilNow(daysNumber)
@@ -178,9 +186,9 @@ export const getOrders = async (req: Request, res: Response) => {
 
 export const getOrderById = async (req: Request, res: Response) => {
     try {
-        const { id } = req.params
+        const id = String(req.params.id)
 
-        const order = await Order.findById(id)
+        const order = await Order.findOne({ _id: id, storeId: (req as AuthRequest).user.storeId })
 
         if (!order) {
             return res.status(404).json({
@@ -204,17 +212,19 @@ export const getOrderById = async (req: Request, res: Response) => {
 
 export const updateOrderStatus = async (req: Request, res: Response) => {
     try {
-        const { id } = req.params
-        const { status } = req.body
-        const order = await Order.findById(id).select({ paidAt: 1 }).lean()
+        const id = String(req.params.id)
+        const { status, version } = req.body
+        const storeId = (req as AuthRequest).user.storeId
+        const order = await Order.findOne({ _id: id, storeId }).select({ paidAt: 1 }).lean()
         if (!order) return res.status(404).json({ success: false, message: 'Order not found' })
-        if (order.paidAt) await assertFinancialPeriodOpen(order.paidAt)
+        if (order.paidAt) await assertFinancialPeriodOpen(storeId, order.paidAt)
 
-        const updated = await Order.findByIdAndUpdate(
-            id,
-            { status, ...(status === 'paid' ? { paidAt: getPaidAt('paid') } : {}) },
-            { returnDocument: 'after' },
+        const updated = await Order.findOneAndUpdate(
+            { _id: id, storeId, version },
+            { $set: { status, ...(status === 'paid' ? { paidAt: getPaidAt('paid') } : {}) }, $inc: { version: 1 } },
+            { returnDocument: 'after', includeResultMetadata: false },
         )
+        if (!updated) return res.status(409).json({ success: false, code: 'ORDER_VERSION_CONFLICT', message: 'Order was changed by another device' })
 
         res.json({
             success: true,
@@ -233,12 +243,14 @@ export const updateOrderStatus = async (req: Request, res: Response) => {
 }
 export const updateOrderPayment = async (req: Request, res: Response) => {
     try {
-        const { id } = req.params
-        const { paymentMethod } = req.body
-        const order = await Order.findById(id).select({ paidAt: 1 }).lean()
+        const id = String(req.params.id)
+        const { paymentMethod, version } = req.body
+        const storeId = (req as AuthRequest).user.storeId
+        const order = await Order.findOne({ _id: id, storeId }).select({ paidAt: 1 }).lean()
         if (!order) return res.status(404).json({ success: false, message: 'Order not found' })
-        if (order.paidAt) await assertFinancialPeriodOpen(order.paidAt)
-        const updated = await Order.findByIdAndUpdate(id, { paymentMethod }, { returnDocument: 'after' })
+        if (order.paidAt) await assertFinancialPeriodOpen(storeId, order.paidAt)
+        const updated = await Order.findOneAndUpdate({ _id: id, storeId, version }, { $set: { paymentMethod }, $inc: { version: 1 } }, { returnDocument: 'after', includeResultMetadata: false })
+        if (!updated) return res.status(409).json({ success: false, code: 'ORDER_VERSION_CONFLICT', message: 'Order was changed by another device' })
 
         res.json({
             success: true,

@@ -4,6 +4,7 @@ import { Role, type AuthRequest } from '../middlewares/auth.js'
 import User from '../models/user.js'
 import { customError, generateTokens } from '../utils/index.js'
 import UserToken from '../models/user-token.js'
+import Store from '../models/store.js'
 export const login = async (req: Request, res: Response, next: NextFunction) => {
     try {
         const { account, password } = req.body
@@ -15,9 +16,13 @@ export const login = async (req: Request, res: Response, next: NextFunction) => 
         if (!isValid) {
             return res.status(200).json({ error: false, message: 'Invalid account or password' })
         }
+        if (!user.defaultStoreId) {
+            return res.status(403).json({ error: true, message: 'User is not assigned to a store' })
+        }
         const payload = {
             account: user.account,
             role: user.role,
+            storeId: user.defaultStoreId?.toString(),
         }
         const { accessToken, refreshToken } = await generateTokens(payload)
 
@@ -50,6 +55,7 @@ export const login = async (req: Request, res: Response, next: NextFunction) => 
                 id: user._id?.toString(),
                 account: user.account,
                 role: user.role,
+                storeId: payload.storeId,
             },
             message: 'Logged in successfully',
         })
@@ -91,7 +97,7 @@ export const logout = async (req: Request, res: Response, next: NextFunction) =>
         )
     }
 }
-export const serverRegister = async (account: string, password: string, role: Role) => {
+export const serverRegister = async (account: string, password: string, role: Role, storeId: string) => {
     try {
         const user = await User.findOne({
             account,
@@ -105,6 +111,8 @@ export const serverRegister = async (account: string, password: string, role: Ro
             account,
             role,
             password: hashPassword,
+            storeIds: [storeId],
+            defaultStoreId: storeId,
         }).save()
 
         console.log('User registered successfully')
@@ -114,14 +122,26 @@ export const serverRegister = async (account: string, password: string, role: Ro
 }
 
 export async function ensureDefaultUsers() {
+    const store = await Store.findOneAndUpdate(
+        { code: 'main' },
+        { $setOnInsert: { code: 'main', name: 'Cửa hàng chính', timezone: 'Asia/Taipei' } },
+        { upsert: true, returnDocument: 'after' },
+    )
+    if (!store) throw new Error('Unable to initialize default store')
+    await User.updateMany(
+        { $or: [{ defaultStoreId: { $exists: false } }, { defaultStoreId: null }] },
+        { $set: { defaultStoreId: store._id }, $addToSet: { storeIds: store._id } },
+    )
     await serverRegister(
         process.env.DEFAULT_EMPLOYEE_ACCOUNT || 'employee',
         process.env.DEFAULT_EMPLOYEE_PASSWORD || 'employee',
         Role.Employee,
+        store._id.toString(),
     )
     await serverRegister(
         process.env.DEFAULT_ADMIN_ACCOUNT || 'admin',
         process.env.DEFAULT_ADMIN_PASSWORD || 'admin123456',
         Role.Admin,
+        store._id.toString(),
     )
 }

@@ -8,6 +8,8 @@ export interface IUser {
     role: Role
     isOnline: boolean
     lastTimeOnline: Date
+    storeIds: mongoose.Types.ObjectId[]
+    defaultStoreId?: mongoose.Types.ObjectId
 }
 const Schema = mongoose.Schema
 
@@ -33,6 +35,8 @@ const userSchema = new Schema<IUser>({
         type: String,
         enum: Object.values(Role),
     },
+    storeIds: [{ type: Schema.Types.ObjectId, ref: 'Store' }],
+    defaultStoreId: { type: Schema.Types.ObjectId, ref: 'Store' },
 })
 
 const User = mongoose.model<IUser>('User', userSchema)

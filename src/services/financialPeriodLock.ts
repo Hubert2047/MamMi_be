@@ -1,6 +1,7 @@
 import DailyClosing from '../models/daily-closing.js'
 
 export class FinancialPeriodClosedError extends Error {
+    code = 'FINANCIAL_PERIOD_CLOSED'
     statusCode = 409
 
     constructor() {
@@ -9,8 +10,9 @@ export class FinancialPeriodClosedError extends Error {
     }
 }
 
-export async function isFinancialPeriodClosed(timestamp: Date): Promise<boolean> {
+export async function isFinancialPeriodClosed(storeId: string, timestamp: Date): Promise<boolean> {
     const closing = await DailyClosing.findOne({
+        storeId,
         status: 'confirmed',
         periodStart: { $lt: timestamp },
         periodEnd: { $gte: timestamp },
@@ -19,6 +21,6 @@ export async function isFinancialPeriodClosed(timestamp: Date): Promise<boolean>
     return Boolean(closing)
 }
 
-export async function assertFinancialPeriodOpen(timestamp: Date): Promise<void> {
-    if (await isFinancialPeriodClosed(timestamp)) throw new FinancialPeriodClosedError()
+export async function assertFinancialPeriodOpen(storeId: string, timestamp: Date): Promise<void> {
+    if (await isFinancialPeriodClosed(storeId, timestamp)) throw new FinancialPeriodClosedError()
 }

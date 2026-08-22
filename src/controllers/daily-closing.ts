@@ -2,7 +2,7 @@ import type { Request, Response } from 'express'
 import DailyClosing from '../models/daily-closing.js'
 import { getFromDayUntilNow, TIME_ZONE } from '../utils/index.js'
 import { sendMessageToGroup } from '../services/line.js'
-import { toZonedTime } from 'date-fns-tz'
+import { fromZonedTime, toZonedTime } from 'date-fns-tz'
 import { format } from 'date-fns'
 import { calculateActualCash, canVoidLatestClosing, isValidCashData, requiresClosingReason } from '../utils/dailyClosingCalculations.js'
 import { getDailyClosingSummary as loadDailyClosingSummary } from '../services/dailyClosingSummary.js'
@@ -23,13 +23,15 @@ export const createDailyClosing = async (req: Request, res: Response) => {
         }
 
         const periodEnd = new Date()
-        const summary = await loadDailyClosingSummary(periodEnd)
+        const storeId = (req as AuthRequest).user.storeId
+        const summary = await loadDailyClosingSummary(storeId, periodEnd)
         const calculatedSystemAmount = summary.systemAmount
         if (requiresClosingReason(Number(actualTotal) - calculatedSystemAmount, reason)) {
             return res.status(400).json({ success: false, message: 'A reason is required when there is a difference' })
         }
 
         const dailyClosing = new DailyClosing({
+            storeId,
             periodStart: summary.periodStart,
             periodEnd,
             status: 'confirmed',
@@ -61,7 +63,7 @@ export const createDailyClosing = async (req: Request, res: Response) => {
 
 export const getDailyClosingSummary = async (req: Request, res: Response) => {
     try {
-        const summary = await loadDailyClosingSummary()
+        const summary = await loadDailyClosingSummary((req as AuthRequest).user.storeId)
         return res.json({ success: true, data: summary })
     } catch (error) {
         console.error(error)
@@ -77,11 +79,12 @@ export const voidDailyClosing = async (req: Request, res: Response) => {
             return res.status(400).json({ success: false, message: 'A reason is required to void a closing' })
         }
 
-        const closing = await DailyClosing.findById(id).lean()
+        const storeId = (req as AuthRequest).user.storeId
+        const closing = await DailyClosing.findOne({ _id: id, storeId }).lean()
         if (!closing) return res.status(404).json({ success: false, message: 'DailyClosing not found' })
         if (closing.status === 'voided') return res.status(400).json({ success: false, message: 'DailyClosing is already voided' })
 
-        const latest = await DailyClosing.findOne({ status: { $ne: 'voided' } })
+        const latest = await DailyClosing.findOne({ storeId, status: { $ne: 'voided' } })
             .sort({ periodEnd: -1, createdAt: -1 })
             .select({ _id: 1 })
             .lean()
@@ -90,11 +93,11 @@ export const voidDailyClosing = async (req: Request, res: Response) => {
         }
 
         const result = await DailyClosing.updateOne(
-            { _id: id, status: 'confirmed' },
+            { _id: id, storeId, status: 'confirmed' },
             { status: 'voided', voidedAt: new Date(), voidedBy: (req as AuthRequest).user.account, voidReason: reason.trim() },
         )
         if (result.modifiedCount !== 1) return res.status(409).json({ success: false, message: 'DailyClosing changed before it was voided' })
-        return res.json({ success: true, data: await DailyClosing.findById(id) })
+        return res.json({ success: true, data: await DailyClosing.findOne({ _id: id, storeId }) })
     } catch (error) {
         console.error(error)
         return res.status(500).json({ success: false, message: 'Error voiding DailyClosing', error })
@@ -103,17 +106,34 @@ export const voidDailyClosing = async (req: Request, res: Response) => {
 
 export const getDailyClosings = async (req: Request, res: Response) => {
     try {
-        const { days } = req.query
-        const filter: any = {}
-        if (days) {
+        const { from, to, status, days } = req.query
+        const page = Math.max(1, Number(req.query.page) || 1)
+        const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 10))
+        const filter: any = { storeId: (req as AuthRequest).user.storeId }
+        if (from || to) {
+            filter.periodStart = {}
+            if (from) filter.periodStart.$gte = fromZonedTime(String(from), TIME_ZONE)
+            if (to) filter.periodStart.$lte = fromZonedTime(String(to), TIME_ZONE)
+        } else if (days) {
             const daysNumber = Number(days)
             const { start } = getFromDayUntilNow(daysNumber)
             filter.createdAt = { $gte: start }
-        } else {
-            filter.status = { $ne: 'voided' }
         }
-        const dailyClosings = await DailyClosing.find(filter).sort({ createdAt: -1 }).lean()
-        return res.json({ success: true, data: dailyClosings })
+        if (status === 'confirmed' || status === 'voided') filter.status = status
+
+        const [dailyClosings, total, confirmed, voided, latestConfirmed] = await Promise.all([
+            DailyClosing.find(filter).sort({ periodStart: 1, createdAt: 1, _id: 1 }).skip((page - 1) * limit).limit(limit).lean(),
+            DailyClosing.countDocuments(filter),
+            DailyClosing.countDocuments({ ...filter, status: 'confirmed' }),
+            DailyClosing.countDocuments({ ...filter, status: 'voided' }),
+            DailyClosing.findOne({ storeId: filter.storeId, status: 'confirmed' }).sort({ periodEnd: -1, createdAt: -1 }).select({ _id: 1, periodEnd: 1 }).lean(),
+        ])
+        return res.json({
+            success: true,
+            data: dailyClosings,
+            pagination: { page, limit, total, pages: Math.ceil(total / limit) },
+            summary: { total, confirmed, voided, latestConfirmedId: latestConfirmed?._id ?? null, latestConfirmedPeriodEnd: latestConfirmed?.periodEnd ?? null },
+        })
     } catch (error) {
         console.error(error)
         return res.status(500).json({ success: false, message: 'Error fetching DailyClosing', error })

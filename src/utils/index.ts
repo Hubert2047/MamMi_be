@@ -6,6 +6,7 @@ import { fromZonedTime, toZonedTime } from 'date-fns-tz'
 export type T_generateToken = {
     account: string
     role: Role
+    storeId: string
 }
 
 export const TIME_ZONE = 'Asia/Taipei'

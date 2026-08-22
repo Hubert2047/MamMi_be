@@ -5,6 +5,7 @@ type CashData = {
 }
 
 export interface IDailyClosing extends Document {
+    storeId: mongoose.Types.ObjectId
     periodStart: Date
     periodEnd: Date
     status: 'confirmed' | 'voided'
@@ -28,6 +29,7 @@ export interface IDailyClosing extends Document {
 
 const DailyClosingSchema = new Schema<IDailyClosing>(
     {
+        storeId: { type: Schema.Types.ObjectId, ref: 'Store', required: true },
         periodStart: { type: Date, required: true },
         periodEnd: { type: Date, required: true },
         status: { type: String, enum: ['confirmed', 'voided'], default: 'confirmed', required: true },
@@ -53,8 +55,8 @@ const DailyClosingSchema = new Schema<IDailyClosing>(
     { timestamps: true },
 )
 
-DailyClosingSchema.index({ createdAt: 1 })
-DailyClosingSchema.index({ status: 1, periodEnd: -1 })
-DailyClosingSchema.index({ status: 1, periodStart: 1, periodEnd: 1 })
+DailyClosingSchema.index({ storeId: 1, createdAt: 1 })
+DailyClosingSchema.index({ storeId: 1, status: 1, periodEnd: -1 })
+DailyClosingSchema.index({ storeId: 1, status: 1, periodStart: 1, periodEnd: 1 })
 
 export default mongoose.model<IDailyClosing>('DailyClosing', DailyClosingSchema)

@@ -11,6 +11,7 @@ export enum Role {
 export interface T_UserToken {
     account: string
     role: Role
+    storeId: string
 }
 export interface AuthRequest extends Request {
     user: T_UserToken

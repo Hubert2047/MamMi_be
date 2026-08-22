@@ -18,6 +18,7 @@ export const refreshToken = async (
         const payload = {
             account: tokenDetails.account,
             role: tokenDetails.role,
+            storeId: tokenDetails.storeId,
         };
         const { accessToken } = await generateTokens(payload);
         res.status(200).json({
