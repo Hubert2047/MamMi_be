@@ -1,6 +1,31 @@
 import type { Request, Response } from 'express'
 import Item from '../models/item.js'
+import type { LocalizedOption } from '../models/item.js'
 import mongoose from 'mongoose'
+
+const optionLabel = (value: string) => value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'option'
+const normalizeNames = (value: unknown) => {
+    const names = value && typeof value === 'object' ? value as Record<string, unknown> : {}
+    const normalized = {
+        vi: typeof names.vi === 'string' ? names.vi.trim() : '',
+        en: typeof names.en === 'string' ? names.en.trim() : '',
+        'zh-TW': typeof names['zh-TW'] === 'string' ? names['zh-TW'].trim() : '',
+    }
+    return normalized.vi || normalized.en || normalized['zh-TW'] ? normalized : null
+}
+const normalizeOptions = (options: unknown, prefix: string): LocalizedOption[] => (Array.isArray(options) ? options : []).map((option: any, index) => {
+    if (typeof option === 'string') {
+        return { id: `${prefix}-${index + 1}-${optionLabel(option)}`, names: { vi: option, en: option, 'zh-TW': option } }
+    }
+    return {
+        id: option.id || `${prefix}-${index + 1}`,
+        names: {
+            vi: option.names?.vi || '',
+            en: option.names?.en || '',
+            'zh-TW': option.names?.['zh-TW'] || '',
+        },
+    }
+})
 
 export const getItems = async (req: Request, res: Response) => {
     try {
@@ -12,18 +37,24 @@ export const getItems = async (req: Request, res: Response) => {
         }
 
         const items = await Item.find(filter)
-            .populate('categoryId', 'name')
+            .populate('categoryId', 'names name')
             .populate({
                 path: 'addons',
                 match: { active: true },
-                select: 'name priceExtra',
+                select: 'names name priceExtra',
             })
             .lean()
 
         const result = items.map((item: any) => ({
             ...item,
+            variants: normalizeOptions(item.variants, 'variant'),
+            noteOptions: normalizeOptions(item.noteOptions, 'note'),
             name: item.names?.[language] || item.names?.vi || Object.values(item.names || {})[0] || '',
-            categoryName: item.categoryId?.name,
+            categoryName: item.categoryId?.names?.[language] || item.categoryId?.names?.vi || item.categoryId?.names?.en || item.categoryId?.names?.['zh-TW'] || item.categoryId?.name || '',
+            addons: item.addons?.map((addon: any) => ({
+                ...addon,
+                name: addon.names?.[language] || addon.names?.vi || addon.names?.en || addon.names?.['zh-TW'] || addon.name || '',
+            })),
         }))
 
         res.json({
@@ -66,7 +97,10 @@ export const getItemById = async (req: Request, res: Response) => {
 
 export const createItem = async (req: Request, res: Response) => {
     try {
-        const item = new Item(req.body)
+        const names = normalizeNames(req.body.names)
+        if (!names) return res.status(400).json({ success: false, message: 'At least one product name is required' })
+        const description = req.body.description === undefined ? undefined : normalizeNames(req.body.description)
+        const item = new Item({ ...req.body, names, ...(description ? { description } : {}), variants: normalizeOptions(req.body.variants, 'variant'), noteOptions: normalizeOptions(req.body.noteOptions, 'note') })
         await item.save()
         res.status(201).json({ success: true, data: item })
     } catch (error) {
@@ -76,11 +110,12 @@ export const createItem = async (req: Request, res: Response) => {
 
 export const serverCreateItem = async (data: {
     names: Record<string, string>
-    variants: string[] | null
+    description?: Record<string, string>
+    variants: LocalizedOption[] | string[] | null
     price: Map<string, number>
     addons: string[]
     categoryId: string
-    noteOptions: string[]
+    noteOptions: LocalizedOption[] | string[]
     active: boolean
 }) => {
     try {
@@ -92,11 +127,12 @@ export const serverCreateItem = async (data: {
         const addonsIds = data.addons.map((id) => new mongoose.Types.ObjectId(id))
         const item = new Item({
             names: data.names,
+            description: data.description,
             basePrice: data.price,
-            variants: data.variants,
+            variants: normalizeOptions(data.variants, 'variant'),
             addons: addonsIds,
             categoryId: new mongoose.Types.ObjectId(data.categoryId),
-            noteOptions: data.noteOptions,
+            noteOptions: normalizeOptions(data.noteOptions, 'note'),
             active: data.active,
         })
         await item.save()
@@ -130,7 +166,10 @@ export const serverUpdateItem = async (name: string, price: Map<string, number>)
 export const updateItem = async (req: Request, res: Response) => {
     try {
         const { id } = req.params
-        const updated = await Item.findByIdAndUpdate(id, req.body, { returnDocument: 'after' })
+        const names = req.body.names === undefined ? undefined : normalizeNames(req.body.names)
+        if (req.body.names !== undefined && !names) return res.status(400).json({ success: false, message: 'At least one product name is required' })
+        const description = req.body.description === undefined ? undefined : normalizeNames(req.body.description)
+        const updated = await Item.findByIdAndUpdate(id, { ...req.body, ...(names ? { names } : {}), ...(description ? { description } : req.body.description !== undefined ? { description: {} } : {}), ...(req.body.variants ? { variants: normalizeOptions(req.body.variants, 'variant') } : {}), ...(req.body.noteOptions ? { noteOptions: normalizeOptions(req.body.noteOptions, 'note') } : {}) }, { returnDocument: 'after', runValidators: true })
         res.json({ success: true, data: updated })
     } catch (error) {
         res.status(400).json({ success: false, message: 'Error updating item', error })

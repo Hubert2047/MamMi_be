@@ -2,21 +2,26 @@ import mongoose, { Schema, Document } from 'mongoose'
 
 export interface IItem extends Document {
     names: Map<string, string>
-    variants: string[] | null
+    description: Map<string, string>
+    variants: Array<LocalizedOption | string>
     price: Map<string, number>
     categoryId: mongoose.Types.ObjectId
     addons: mongoose.Types.ObjectId[]
-    noteOptions: string[]
+    noteOptions: Array<LocalizedOption | string>
     active: boolean
+}
+
+export interface LocalizedOption {
+    id: string
+    names: { vi: string; en: string; 'zh-TW': string }
 }
 
 const ItemSchema = new Schema<IItem>(
     {
         names: { type: Map, of: String, required: true },
-        variants: {
-            type: [String],
-            default: [],
-        },
+        description: { type: Map, of: String, default: {} },
+        // Mixed keeps legacy string arrays readable while the controller normalizes new data.
+        variants: { type: [Schema.Types.Mixed], default: [] },
         price: {
             type: Map,
             of: Number,
@@ -29,7 +34,7 @@ const ItemSchema = new Schema<IItem>(
             ref: 'Category',
             required: true,
         },
-        noteOptions: [String],
+        noteOptions: { type: [Schema.Types.Mixed], default: [] },
         active: { type: Boolean, default: true },
     },
     { timestamps: true },
