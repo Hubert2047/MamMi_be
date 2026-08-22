@@ -1,5 +1,8 @@
 import type { Request, Response } from 'express'
 import Order from '../models/order.js'
+import StoreAddon from '../models/store-addon.js'
+import StoreItem from '../models/store-item.js'
+import mongoose from 'mongoose'
 import { getFromDayUntilNow, getFullDay } from '../utils/index.js'
 import { calculateTotal } from '../utils/orderCalculations.js'
 import { getPaidAt } from '../utils/orderPaymentCalculations.js'
@@ -69,6 +72,13 @@ export const createOrder = async (req: Request, res: Response) => {
             return res.status(400).json({ success: false, message: 'Items is required' })
         }
 
+        const itemIds: string[] = [...new Set<string>(order.items.map((item: any) => String(item.id)))]
+        const validItemIds = itemIds.filter((id) => mongoose.isValidObjectId(id))
+        if (validItemIds.length !== itemIds.length) return res.status(400).json({ success: false, code: 'ITEM_NOT_AVAILABLE', message: 'One or more selected products are no longer available' })
+        await StoreItem.updateMany({ storeId, temporarilyUnavailable: true, temporarilyUnavailableUntil: { $lte: new Date() } }, { $set: { temporarilyUnavailable: false }, $unset: { temporarilyUnavailableUntil: 1 } })
+        const availableItems = await StoreItem.countDocuments({ storeId, itemId: { $in: validItemIds }, permanentlyActive: { $ne: false }, temporarilyUnavailable: false })
+        if (availableItems !== validItemIds.length) return res.status(400).json({ success: false, code: 'ITEM_NOT_AVAILABLE', message: 'One or more selected products are no longer available' })
+
         if (order.checkoutPending && order._id) {
             const updated = await Order.findByIdAndUpdate(
                 { _id: order._id, storeId, version: order.version },
@@ -81,6 +91,15 @@ export const createOrder = async (req: Request, res: Response) => {
             emitStoreEvent(storeId, 'order.payment.updated', { orderId: String(updated._id), changedFields: ['status', 'paymentMethod'] })
             const nextNumber = await getNextNumber(storeId)
             return res.status(200).json({ success: true, data: nextNumber })
+        }
+
+        const addonIds: string[] = [...new Set<string>(order.items.flatMap((item: any) => Array.isArray(item.addons) ? item.addons.map((addon: any) => String(addon.id)) : []))]
+        const validAddonIds = addonIds.filter((id) => mongoose.isValidObjectId(id))
+        if (validAddonIds.length !== addonIds.length) return res.status(400).json({ success: false, code: 'ADDON_NOT_AVAILABLE', message: 'One or more selected add-ons are no longer available' })
+        if (validAddonIds.length) {
+            await StoreAddon.updateMany({ storeId, temporarilyUnavailable: true, temporarilyUnavailableUntil: { $lte: new Date() } }, { $set: { temporarilyUnavailable: false }, $unset: { temporarilyUnavailableUntil: 1 } })
+            const availableAddons = await StoreAddon.countDocuments({ storeId, addonId: { $in: validAddonIds }, permanentlyActive: { $ne: false }, temporarilyUnavailable: false })
+            if (availableAddons !== validAddonIds.length) return res.status(400).json({ success: false, code: 'ADDON_NOT_AVAILABLE', message: 'One or more selected add-ons are no longer available' })
         }
 
         const normalizedItems = order.items.map((item: any) => ({

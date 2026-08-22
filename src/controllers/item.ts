@@ -48,6 +48,11 @@ const clearExpiredTemporaryAvailability = async (storeId: string) => {
         { $set: { temporarilyUnavailable: false }, $unset: { temporarilyUnavailableUntil: 1 } },
     )
     if (result.modifiedCount > 0) emitStoreEvent(storeId, 'catalog.store-item.availability.updated', { reason: 'temporary-availability-expired' })
+    const addonResult = await StoreAddon.updateMany(
+        { storeId, temporarilyUnavailable: true, temporarilyUnavailableUntil: { $lte: new Date() } },
+        { $set: { temporarilyUnavailable: false }, $unset: { temporarilyUnavailableUntil: 1 } },
+    )
+    if (addonResult.modifiedCount > 0) emitStoreEvent(storeId, 'catalog.store-addon.availability.updated', { reason: 'temporary-availability-expired' })
 }
 
 const getStoreTimeZone = async (storeId: string) => {
@@ -174,7 +179,7 @@ export const getItems = async (req: Request, res: Response) => {
             ],
         }).lean()
         const addonIds = storeItems.flatMap((storeItem: any) => storeItem.itemId?.addons?.map((addon: any) => addon._id) || [])
-        const storeAddons = await StoreAddon.find({ storeId, addonId: { $in: addonIds }, active: true }).lean()
+        const storeAddons = await StoreAddon.find({ storeId, addonId: { $in: addonIds }, permanentlyActive: { $ne: false } }).lean()
         const storeAddonById = new Map(storeAddons.map((addon: any) => [String(addon.addonId), addon]))
 
         const result = storeItems.filter((storeItem: any) => storeItem.itemId).map((storeItem: any) => {
@@ -192,6 +197,8 @@ export const getItems = async (req: Request, res: Response) => {
             addons: item.addons?.filter((addon: any) => storeAddonById.has(String(addon._id))).map((addon: any) => ({
                 ...addon,
                 priceExtra: storeAddonById.get(String(addon._id)).priceExtra,
+                permanentlyActive: storeAddonById.get(String(addon._id)).permanentlyActive !== false,
+                temporarilyUnavailable: storeAddonById.get(String(addon._id)).temporarilyUnavailable === true,
                 name: addon.names?.[language] || addon.names?.vi || addon.names?.en || addon.names?.['zh-TW'] || addon.name || '',
             })),
             })

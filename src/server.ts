@@ -26,7 +26,7 @@ import { ensureDefaultUsers } from './controllers/auth.js'
 import Store from './models/store.js'
 import store from './routers/store.js'
 import user from './routers/user.js'
-import { ensureStoreAddons, ensureStoreCatalog, ensureStoreScopedFinancialData, migrateStoreItemAvailability } from './services/storeCatalogMigration.js'
+import { ensureStoreAddons, ensureStoreCatalog, ensureStoreScopedFinancialData, migrateStoreAddonAvailability, migrateStoreItemAvailability } from './services/storeCatalogMigration.js'
 import { initializeRealtime } from './realtime.js'
 dotenv.config()
 
@@ -36,6 +36,7 @@ const app: Application = express()
     await connectDB()
     await ensureDefaultUsers()
     await migrateStoreItemAvailability()
+    await migrateStoreAddonAvailability()
     const defaultStore = await Store.findOne({ code: 'main' }).select({ _id: 1 }).lean()
     if (defaultStore) {
         await ensureStoreCatalog(defaultStore._id.toString())

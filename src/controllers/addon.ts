@@ -3,6 +3,9 @@ import AddonModel from '../models/addon.js'
 import StoreAddon from '../models/store-addon.js'
 import type { AuthRequest } from '../middlewares/auth.js'
 import { emitCatalogEventToStores, emitStoreEvent } from '../realtime.js'
+import Store from '../models/store.js'
+import { Role } from '../constants/role.js'
+import { nextStoreMidnight } from '../utils/storeAvailability.js'
 
 export type AddonNames = { vi: string; en: string; 'zh-TW': string }
 
@@ -23,22 +26,34 @@ const toResponseAddon = (addon: any, language = 'vi') => {
     return { ...addon, names, name: names[language] || names.vi || names.en || names['zh-TW'] || legacyName }
 }
 
+const clearExpiredTemporaryAvailability = async (storeId: string) => {
+    const result = await StoreAddon.updateMany(
+        { storeId, temporarilyUnavailable: true, temporarilyUnavailableUntil: { $lte: new Date() } },
+        { $set: { temporarilyUnavailable: false }, $unset: { temporarilyUnavailableUntil: 1 } },
+    )
+    if (result.modifiedCount > 0) emitStoreEvent(storeId, 'catalog.store-addon.availability.updated', { reason: 'temporary-availability-expired' })
+}
+
+const getStoreTimeZone = async (storeId: string) => (await Store.findById(storeId).select({ timezone: 1 }).lean())?.timezone || 'Asia/Taipei'
+
 export const getStoreAddons = async (req: Request, res: Response) => {
     try {
         const storeId = (req as AuthRequest).user.storeId
+        await clearExpiredTemporaryAvailability(storeId)
         const language = typeof req.query.lang === 'string' ? req.query.lang : 'vi'
         const storeAddons = await StoreAddon.find({ storeId }).populate('addonId').lean()
-        res.json(storeAddons.filter((entry: any) => entry.addonId).map((entry: any) => ({ ...toResponseAddon(entry.addonId, language), priceExtra: entry.priceExtra, active: entry.active })))
+        res.json(storeAddons.filter((entry: any) => entry.addonId).map((entry: any) => ({ ...toResponseAddon(entry.addonId, language), priceExtra: entry.priceExtra, permanentlyActive: entry.permanentlyActive !== false, temporarilyUnavailable: entry.temporarilyUnavailable === true, temporarilyUnavailableUntil: entry.temporarilyUnavailableUntil || null })))
     } catch (err) { res.status(500).json({ message: 'Server error', error: err }) }
 }
 
 export const addStoreAddon = async (req: Request, res: Response) => {
     try {
         const storeId = (req as AuthRequest).user.storeId
-        const { addonId, priceExtra = 0, active = true } = req.body
+        const { addonId, priceExtra = 0, permanentlyActive = true } = req.body
+        if (req.body.permanentlyActive !== undefined && ![Role.Admin, Role.SuperAdmin].includes((req as AuthRequest).user.role)) return res.status(403).json({ message: 'Only Admin or SuperAdmin can change permanent availability' })
         if (!await AddonModel.exists({ _id: addonId })) return res.status(404).json({ message: 'Addon not found' })
-        const storeAddon = await StoreAddon.findOneAndUpdate({ storeId, addonId }, { $set: { priceExtra, active } }, { upsert: true, returnDocument: 'after', includeResultMetadata: false })
-        emitStoreEvent(storeId, 'catalog.store-addon.updated', { addonId: String(addonId), changedFields: ['priceExtra', 'active'] })
+        const storeAddon = await StoreAddon.findOneAndUpdate({ storeId, addonId }, { $set: { priceExtra, permanentlyActive, temporarilyUnavailable: false, temporarilyUnavailableUntil: null } }, { upsert: true, returnDocument: 'after', includeResultMetadata: false })
+        emitStoreEvent(storeId, 'catalog.store-addon.updated', { addonId: String(addonId), changedFields: ['priceExtra', 'permanentlyActive'] })
         res.status(201).json(storeAddon)
     } catch (err) { res.status(400).json({ message: 'Invalid data', error: err }) }
 }
@@ -47,11 +62,30 @@ export const updateStoreAddon = async (req: Request, res: Response) => {
     try {
         const storeId = (req as AuthRequest).user.storeId
         const addonId = String(req.params.addonId)
-        const storeAddon = await StoreAddon.findOneAndUpdate({ storeId, addonId }, { $set: { ...(req.body.priceExtra !== undefined ? { priceExtra: Number(req.body.priceExtra) } : {}), ...(req.body.active !== undefined ? { active: req.body.active } : {}) } }, { returnDocument: 'after', includeResultMetadata: false })
+        const authUser = (req as AuthRequest).user
+        if (req.body.permanentlyActive !== undefined && ![Role.Admin, Role.SuperAdmin].includes(authUser.role)) return res.status(403).json({ message: 'Only Admin or SuperAdmin can change permanent availability' })
+        await clearExpiredTemporaryAvailability(storeId)
+        const set: Record<string, unknown> = {}
+        if (req.body.priceExtra !== undefined) set.priceExtra = Number(req.body.priceExtra)
+        if (req.body.permanentlyActive !== undefined) set.permanentlyActive = Boolean(req.body.permanentlyActive)
+        if (req.body.temporarilyUnavailable !== undefined) {
+            const unavailable = Boolean(req.body.temporarilyUnavailable)
+            set.temporarilyUnavailable = unavailable
+            if (unavailable) set.temporarilyUnavailableUntil = nextStoreMidnight(new Date(), await getStoreTimeZone(storeId))
+        }
+        const update: Record<string, unknown> = { $set: set }
+        if (req.body.temporarilyUnavailable === false) update.$unset = { temporarilyUnavailableUntil: 1 }
+        const storeAddon = await StoreAddon.findOneAndUpdate({ storeId, addonId }, update, { returnDocument: 'after', includeResultMetadata: false })
         if (!storeAddon) return res.status(404).json({ message: 'Addon not found in this store' })
-        emitStoreEvent(storeId, 'catalog.store-addon.updated', { addonId, changedFields: Object.keys(req.body) })
+        const event = Object.keys(set).some((key) => key === 'temporarilyUnavailable' || key === 'permanentlyActive') ? 'catalog.store-addon.availability.updated' : 'catalog.store-addon.updated'
+        emitStoreEvent(storeId, event, { addonId, changedFields: Object.keys(set) })
         res.json(storeAddon)
     } catch (err) { res.status(400).json({ message: 'Invalid data', error: err }) }
+}
+
+export const updateTemporaryStoreAddonAvailability = async (req: Request, res: Response) => {
+    req.body = { temporarilyUnavailable: req.body.temporarilyUnavailable }
+    return updateStoreAddon(req, res)
 }
 
 // Get all addons

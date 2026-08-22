@@ -35,6 +35,17 @@ export async function migrateStoreItemAvailability(): Promise<void> {
     await StoreItem.updateMany({ temporarilyUnavailable: { $exists: false } }, { $set: { temporarilyUnavailable: false } })
 }
 
+export async function migrateStoreAddonAvailability(): Promise<void> {
+    await StoreAddon.updateMany(
+        { active: { $exists: true } },
+        [{ $set: { permanentlyActive: { $ifNull: ['$active', true] }, temporarilyUnavailable: false, temporarilyUnavailableUntil: null } }],
+        { updatePipeline: true },
+    )
+    await StoreAddon.updateMany({ active: { $exists: true } }, { $unset: { active: 1 } })
+    await StoreAddon.updateMany({ permanentlyActive: { $exists: false } }, { $set: { permanentlyActive: true } })
+    await StoreAddon.updateMany({ temporarilyUnavailable: { $exists: false } }, { $set: { temporarilyUnavailable: false } })
+}
+
 export async function ensureStoreAddons(storeId: string): Promise<void> {
     const storeObjectId = new mongoose.Types.ObjectId(storeId)
     const addons = await Addon.find().select({ _id: 1 }).lean()
@@ -42,7 +53,7 @@ export async function ensureStoreAddons(storeId: string): Promise<void> {
     await StoreAddon.bulkWrite(addons.map((addon: any) => ({
         updateOne: {
             filter: { storeId: storeObjectId, addonId: addon._id },
-            update: { $setOnInsert: { storeId: storeObjectId, addonId: addon._id, priceExtra: 0, active: true } },
+            update: { $setOnInsert: { storeId: storeObjectId, addonId: addon._id, priceExtra: 0, permanentlyActive: true, temporarilyUnavailable: false, temporarilyUnavailableUntil: null } },
             upsert: true,
         },
     })), { ordered: false })
