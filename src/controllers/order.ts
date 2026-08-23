@@ -10,6 +10,9 @@ import { buildPaidOrderFilter } from '../utils/paidOrderFilters.js'
 import { assertFinancialPeriodOpen, FinancialPeriodClosedError } from '../services/financialPeriodLock.js'
 import type { AuthRequest } from '../middlewares/auth.js'
 import { emitStoreEvent } from '../realtime.js'
+import DailyClosing from '../models/daily-closing.js'
+import Store from '../models/store.js'
+import { allocateOrderSequence, getCurrentOrderPeriodId, getNextOrderSequence } from '../services/orderNumber.js'
 
 export const getNextOrderNumber = async (req: Request, res: Response) => {
     try {
@@ -56,11 +59,8 @@ export const getSalesByPaymentMethod = async (req: Request, res: Response) => {
 }
 
 export const getNextNumber = async (storeId: string) => {
-    const lastOrder = await Order.findOne({
-        storeId,
-    }).sort({ number: -1 })
-
-    return lastOrder ? lastOrder.number + 1 : 1
+    const periodId = await getCurrentOrderPeriodId(storeId)
+    return getNextOrderSequence(storeId, periodId)
 }
 
 export const createOrder = async (req: Request, res: Response) => {
@@ -115,9 +115,13 @@ export const createOrder = async (req: Request, res: Response) => {
         }))
 
         const totalPrice = calculateTotal(normalizedItems, order.discount)
+        const periodId = await getCurrentOrderPeriodId(storeId)
+        const sequence = await allocateOrderSequence(storeId, periodId)
 
         const newOrder = new Order({
-            number: order.number,
+            number: sequence,
+            periodId,
+            sequence,
             storeId,
             items: normalizedItems,
             totalPrice,
@@ -127,7 +131,7 @@ export const createOrder = async (req: Request, res: Response) => {
             discount: order.discount,
             customer: order.customer,
             source: order.source || 'pos',
-            externalOrderId: order.externalOrderId,
+            ...(order.externalOrderId ? { externalOrderId: order.externalOrderId } : {}),
             paidAt: getPaidAt(order.status),
         })
 
@@ -189,17 +193,32 @@ export const cancelOrder = async (req: Request, res: Response) => {
 
 export const getOrders = async (req: Request, res: Response) => {
     try {
-        const { days } = req.query
-        const filter: any = { storeId: (req as AuthRequest).user.storeId }
-        if (days) {
+        const { days, from, to } = req.query
+        const storeId = (req as AuthRequest).user.storeId
+        const filter: any = { storeId }
+        let paidAtFilter: { $gte?: Date; $gt?: Date; $lte: Date }
+        if (from || to) {
+            const fromDate = from ? new Date(String(from)) : undefined
+            const toDate = to ? new Date(String(to)) : new Date()
+            if ((fromDate && Number.isNaN(fromDate.getTime())) || Number.isNaN(toDate.getTime())) return res.status(400).json({ success: false, message: 'Invalid order date range' })
+            paidAtFilter = { ...(fromDate ? { $gte: fromDate } : {}), $lte: toDate }
+        } else if (days) {
             const daysNumber = Number(days)
             const { start } = getFromDayUntilNow(daysNumber)
-            filter.createdAt = { $gte: start }
+            paidAtFilter = { $gte: start, $lte: new Date() }
         } else {
-            const { start, end } = getFromDayUntilNow(0)
-            filter.createdAt = { $gte: start, $lte: end }
+            const [latestClosing, store] = await Promise.all([
+                DailyClosing.findOne({ storeId, status: { $ne: 'voided' } }).sort({ periodEnd: -1, createdAt: -1 }).select({ periodEnd: 1 }).lean(),
+                Store.findById(storeId).select({ createdAt: 1 }).lean(),
+            ])
+            paidAtFilter = latestClosing
+                ? { $gt: latestClosing.periodEnd, $lte: new Date() }
+                : { $gte: store?.createdAt ?? getFromDayUntilNow(0).start, $lte: new Date() }
         }
-
+        filter.$or = [
+            { status: 'pending' },
+            { status: { $in: ['paid', 'cancelled'] }, paidAt: paidAtFilter },
+        ]
         const orders = await Order.find(filter).sort({ createdAt: -1 })
         res.json({ success: true, data: orders })
     } catch (error) {

@@ -13,9 +13,9 @@ describe('Order multi-store invariants', () => {
         expect(scoped.version).toBe(1)
     })
 
-    it('has store-scoped indexes for order numbers and provider idempotency', () => {
+    it('has period-scoped indexes for order numbers and provider idempotency', () => {
         const indexes = Order.schema.indexes().map(([keys, options]) => ({ keys, options }))
-        expect(indexes).toContainEqual({ keys: { storeId: 1, number: 1 }, options: { unique: true } })
-        expect(indexes).toContainEqual({ keys: { storeId: 1, source: 1, externalOrderId: 1 }, options: { unique: true, sparse: true } })
+        expect(indexes).toContainEqual({ keys: { storeId: 1, periodId: 1, sequence: 1 }, options: { unique: true, partialFilterExpression: { periodId: { $type: 'string' }, sequence: { $type: 'number' } } } })
+        expect(indexes).toContainEqual({ keys: { storeId: 1, source: 1, externalOrderId: 1 }, options: { unique: true, partialFilterExpression: { externalOrderId: { $type: 'string' } } } })
     })
 })

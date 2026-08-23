@@ -1,5 +1,7 @@
 import type { Request, Response } from 'express'
 import Revenue from '../models/revenue.js'
+import DailyClosing from '../models/daily-closing.js'
+import Store from '../models/store.js'
 import { getFromDayUntilNow } from '../utils/index.js'
 import { assertFinancialPeriodOpen, FinancialPeriodClosedError } from '../services/financialPeriodLock.js'
 import type { AuthRequest } from '../middlewares/auth.js'
@@ -16,16 +18,26 @@ export const createRevenue = async (req: Request, res: Response) => {
 
 export const getRevenues = async (req: Request, res: Response) => {
     try {
-        const { days } = req.query
+        const { days, from, to } = req.query
         const storeId = (req as AuthRequest).user.storeId
         const filter: any = { storeId }
-        if (days) {
+        if (from || to) {
+            const fromDate = from ? new Date(String(from)) : undefined
+            const toDate = to ? new Date(String(to)) : new Date()
+            if ((fromDate && Number.isNaN(fromDate.getTime())) || Number.isNaN(toDate.getTime())) return res.status(400).json({ success: false, message: 'Invalid revenue date range' })
+            filter.createdAt = { ...(fromDate ? { $gte: fromDate } : {}), $lte: toDate }
+        } else if (days) {
             const daysNumber = Number(days)
             const { start } = getFromDayUntilNow(daysNumber)
             filter.createdAt = { $gte: start }
         } else {
-            const { start, end } = getFromDayUntilNow(0)
-            filter.createdAt = { $gte: start, $lte: end }
+            const [latestClosing, store] = await Promise.all([
+                DailyClosing.findOne({ storeId, status: { $ne: 'voided' } }).sort({ periodEnd: -1, createdAt: -1 }).select({ periodEnd: 1 }).lean(),
+                Store.findById(storeId).select({ createdAt: 1 }).lean(),
+            ])
+            filter.createdAt = latestClosing
+                ? { $gt: latestClosing.periodEnd, $lte: new Date() }
+                : { $gte: store?.createdAt ?? getFromDayUntilNow(0).start, $lte: new Date() }
         }
         const revenues = await Revenue.find(filter).sort({ createdAt: -1 })
         res.json({ success: true, data: revenues })

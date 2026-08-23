@@ -20,6 +20,10 @@ import employee from './routers/employee.js'
 import refreshTokenRoutes from './routers/refresh-token.js'
 import auth from './routers/auth.js'
 import shiftAttendance from './routers/shift-attendance.js'
+import unit from './routers/unit.js'
+import { ensureDefaultUnits } from './controllers/unit.js'
+import inventory from './routers/inventory.js'
+import stocktake from './routers/stocktake.js'
 import cookieParser from 'cookie-parser'
 import webhook from './routers/webhook.js'
 import { ensureDefaultUsers } from './controllers/auth.js'
@@ -34,6 +38,7 @@ dotenv.config()
 const app: Application = express()
 ;(async () => {
     await connectDB()
+    await ensureDefaultUnits()
     await ensureDefaultUsers()
     await migrateStoreItemAvailability()
     await migrateStoreAddonAvailability()
@@ -62,6 +67,9 @@ const app: Application = express()
     app.use('/api/stores', store)
     app.use('/api/users', user)
     app.use('/api/expenses', expense)
+    app.use('/api/units', unit)
+    app.use('/api/inventory', inventory)
+    app.use('/api/inventory', stocktake)
     app.use('/api/discounts', discount)
     app.use('/api/addons', addon)
     app.use('/api/store-addons', storeAddon)

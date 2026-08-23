@@ -9,15 +9,16 @@ import mongoose from 'mongoose'
 export const login = async (req: Request, res: Response, next: NextFunction) => {
     try {
         const { account, password, storeId } = req.body
-        if (!account || !password) {
+        const normalizedAccount = typeof account === 'string' ? account.trim() : ''
+        if (!normalizedAccount || !password) {
             return res.status(200).json({ error: false, message: 'Account and password are required' })
         }
-        const user = await User.findOne({ account })
+        const user = await User.findOne({ account: normalizedAccount })
         const isValid = user && user.active !== false && (await bcrypt.compare(password, user.password))
         if (!isValid) {
             return res.status(200).json({ error: false, message: 'Invalid account or password' })
         }
-        let activeStoreId = user.defaultStoreId?.toString()
+        let activeStoreId = user.defaultStoreId?.toString() || user.storeIds?.[0]?.toString()
         if (storeId && !mongoose.isValidObjectId(storeId)) {
             return res.status(400).json({ error: true, message: 'Invalid store id' })
         }
@@ -111,7 +112,8 @@ export const logout = async (req: Request, res: Response, next: NextFunction) =>
 export const getLoginStores = async (req: Request, res: Response) => {
     try {
         const { account, password } = req.body
-        const user = await User.findOne({ account }).select({ password: 1, role: 1, storeIds: 1 }).lean()
+        const normalizedAccount = typeof account === 'string' ? account.trim() : ''
+        const user = await User.findOne({ account: normalizedAccount }).select({ password: 1, role: 1, storeIds: 1 }).lean()
         if (!user || user.active === false || !password || !(await bcrypt.compare(password, user.password))) return res.status(401).json({ error: true, message: 'Invalid account or password' })
         const filter = user.role === Role.SuperAdmin ? { active: true } : { _id: { $in: user.storeIds || [] }, active: true }
         const stores = await Store.find(filter).select({ code: 1, name: 1 }).sort({ name: 1 }).lean()

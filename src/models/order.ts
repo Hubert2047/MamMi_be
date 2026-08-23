@@ -30,7 +30,11 @@ interface Customer {
 }
 export interface IOrder extends Document {
     storeId: mongoose.Types.ObjectId
+    /** Legacy field retained for old records and existing clients. New orders set it to sequence. */
     number: number
+    /** Counter scope. Old orders may not have these fields until migrated/backfilled. */
+    periodId?: string
+    sequence?: number
     items: OrderItem[]
     totalPrice: number
     status: 'pending' | 'paid' | 'cancelled'
@@ -90,6 +94,8 @@ const OrderSchema = new Schema<IOrder>(
     {
         storeId: { type: Schema.Types.ObjectId, ref: 'Store', required: true },
         number: { type: Number, required: true },
+        periodId: { type: String },
+        sequence: { type: Number },
         items: [OrderItemSchema],
         totalPrice: { type: Number, required: true },
         paidAt: { type: Date },
@@ -126,7 +132,13 @@ const OrderSchema = new Schema<IOrder>(
 OrderSchema.index({ storeId: 1, createdAt: -1 })
 OrderSchema.index({ storeId: 1, status: 1, createdAt: -1 })
 OrderSchema.index({ storeId: 1, status: 1, paidAt: -1 })
-OrderSchema.index({ storeId: 1, number: 1 }, { unique: true })
-OrderSchema.index({ storeId: 1, source: 1, externalOrderId: 1 }, { unique: true, sparse: true })
+OrderSchema.index(
+    { storeId: 1, periodId: 1, sequence: 1 },
+    { unique: true, partialFilterExpression: { periodId: { $type: 'string' }, sequence: { $type: 'number' } } },
+)
+OrderSchema.index(
+    { storeId: 1, source: 1, externalOrderId: 1 },
+    { unique: true, partialFilterExpression: { externalOrderId: { $type: 'string' } } },
+)
 
 export default mongoose.model<IOrder>('Order', OrderSchema)
