@@ -2,6 +2,7 @@ import type { Request, Response } from 'express'
 import Order from '../models/order.js'
 import StoreAddon from '../models/store-addon.js'
 import StoreItem from '../models/store-item.js'
+import Item from '../models/item.js'
 import mongoose from 'mongoose'
 import { getFromDayUntilNow, getFullDay } from '../utils/index.js'
 import { calculateTotal } from '../utils/orderCalculations.js'
@@ -13,6 +14,7 @@ import { emitStoreEvent } from '../realtime.js'
 import DailyClosing from '../models/daily-closing.js'
 import Store from '../models/store.js'
 import { allocateOrderSequence, getCurrentOrderPeriodId, getNextOrderSequence } from '../services/orderNumber.js'
+import { createKitchenPrintJobs } from '../services/printJobs.js'
 
 export const getNextOrderNumber = async (req: Request, res: Response) => {
     try {
@@ -102,15 +104,22 @@ export const createOrder = async (req: Request, res: Response) => {
             if (availableAddons !== validAddonIds.length) return res.status(400).json({ success: false, code: 'ADDON_NOT_AVAILABLE', message: 'One or more selected add-ons are no longer available' })
         }
 
+        const catalogItems = await Item.find({ _id: { $in: validItemIds } }).select('variants noteOptions').lean()
+        const catalogById = new Map(catalogItems.map((catalogItem: any) => [String(catalogItem._id), catalogItem]))
+        const optionName = (option: any) => {
+            if (typeof option === 'string') return option
+            return option?.names?.vi || option?.names?.en || option?.names?.['zh-TW'] || option?.id || ''
+        }
+
         const normalizedItems = order.items.map((item: any) => ({
             id: item.id,
             itemId: item.itemId,
             name: item.name,
             quantity: item.quantity || 1,
             basePrice: item.basePrice,
-            variant: item.variant,
+            variant: optionName(catalogById.get(String(item.id))?.variants?.find((option: any) => option?.id === item.variant) || item.variant),
             addons: item.addons,
-            noteOptions: item.noteOptions || [],
+            noteOptions: (item.noteOptions || []).map((selectedOption: any) => optionName(catalogById.get(String(item.id))?.noteOptions?.find((option: any) => option?.id === selectedOption) || selectedOption)),
             note: item.note,
         }))
 
@@ -136,6 +145,13 @@ export const createOrder = async (req: Request, res: Response) => {
         })
 
         await newOrder.save()
+        if (order.printOnConfirm !== false) {
+            try {
+                await createKitchenPrintJobs(newOrder)
+            } catch (printError) {
+                console.error('Failed to queue kitchen print jobs:', printError)
+            }
+        }
         emitStoreEvent(storeId, 'order.created', { orderId: String(newOrder._id), source: newOrder.source })
 
         const nextNumber = await getNextNumber(storeId)

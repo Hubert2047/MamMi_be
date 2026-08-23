@@ -32,6 +32,7 @@ import store from './routers/store.js'
 import user from './routers/user.js'
 import { ensureStoreAddons, ensureStoreCatalog, ensureStoreScopedFinancialData, migrateStoreAddonAvailability, migrateStoreItemAvailability } from './services/storeCatalogMigration.js'
 import { initializeRealtime } from './realtime.js'
+import printAgent from './routers/print-agent.js'
 dotenv.config()
 
 
@@ -77,6 +78,7 @@ const app: Application = express()
     app.use('/api/daily-closing', dailyClosing)
     app.use('/api/employee', employee)
     app.use('/api/shift-attendance', shiftAttendance)
+    app.use('/api/print-agent', printAgent)
     
     const httpServer = createServer(app)
     initializeRealtime(httpServer, process.env.FRONTEND_URL || 'http://localhost:3000')
