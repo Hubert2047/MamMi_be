@@ -104,24 +104,39 @@ export const createOrder = async (req: Request, res: Response) => {
             if (availableAddons !== validAddonIds.length) return res.status(400).json({ success: false, code: 'ADDON_NOT_AVAILABLE', message: 'One or more selected add-ons are no longer available' })
         }
 
-        const catalogItems = await Item.find({ _id: { $in: validItemIds } }).select('variants noteOptions').lean()
+        const catalogItems = await Item.find({ _id: { $in: validItemIds } }).select('names variants noteOptions addons').populate('addons', 'names name').lean()
         const catalogById = new Map(catalogItems.map((catalogItem: any) => [String(catalogItem._id), catalogItem]))
+        const chineseName = (value: any) => value?.names?.['zh-TW'] || value?.names?.vi || value?.names?.en || value?.name || ''
         const optionName = (option: any) => {
             if (typeof option === 'string') return option
-            return option?.names?.vi || option?.names?.en || option?.names?.['zh-TW'] || option?.id || ''
+            return chineseName(option) || option?.id || ''
         }
 
-        const normalizedItems = order.items.map((item: any) => ({
-            id: item.id,
-            itemId: item.itemId,
-            name: item.name,
-            quantity: item.quantity || 1,
-            basePrice: item.basePrice,
-            variant: optionName(catalogById.get(String(item.id))?.variants?.find((option: any) => option?.id === item.variant) || item.variant),
-            addons: item.addons,
-            noteOptions: (item.noteOptions || []).map((selectedOption: any) => optionName(catalogById.get(String(item.id))?.noteOptions?.find((option: any) => option?.id === selectedOption) || selectedOption)),
-            note: item.note,
-        }))
+        const normalizedItems = order.items.map((item: any) => {
+            const catalogItem = catalogById.get(String(item.id))
+            const selectedVariant = catalogItem?.variants?.find((option: any) => option?.id === item.variant) || item.variant
+            const selectedNoteOptions = (item.noteOptions || []).map((selectedOption: any) => catalogItem?.noteOptions?.find((option: any) => option?.id === selectedOption) || selectedOption)
+            const selectedAddons = (item.addons || []).map((addon: any) => {
+                const catalogAddon = catalogItem?.addons?.find((candidate: any) => String(candidate?._id) === String(addon.id))
+                return { ...addon, printName: chineseName(catalogAddon) || addon.name }
+            })
+            const printNoteOptions = selectedNoteOptions.map((selectedOption: any) => optionName(selectedOption))
+            return {
+                id: item.id,
+                itemId: item.itemId,
+                name: item.name,
+                quantity: item.quantity || 1,
+                basePrice: item.basePrice,
+                variant: optionName(selectedVariant),
+                addons: selectedAddons,
+                noteOptions: printNoteOptions,
+                note: item.note,
+                printName: chineseName(catalogItem) || item.name,
+                printVariant: optionName(selectedVariant),
+                printAddons: selectedAddons,
+                printNoteOptions,
+            }
+        })
 
         const totalPrice = calculateTotal(normalizedItems, order.discount)
         const periodId = await getCurrentOrderPeriodId(storeId)
@@ -266,6 +281,18 @@ export const getOrderById = async (req: Request, res: Response) => {
             message: 'Error fetching order',
             error,
         })
+    }
+}
+
+export const printKitchenOrder = async (req: Request, res: Response) => {
+    try {
+        const order = await Order.findOne({ _id: String(req.params.id), storeId: (req as AuthRequest).user.storeId })
+        if (!order) return res.status(404).json({ success: false, message: 'Order not found' })
+        await createKitchenPrintJobs(order)
+        res.status(202).json({ success: true, message: 'Kitchen print job queued' })
+    } catch (error) {
+        console.error('Error queueing kitchen print job:', error)
+        res.status(500).json({ success: false, message: 'Error queueing kitchen print job', error })
     }
 }
 

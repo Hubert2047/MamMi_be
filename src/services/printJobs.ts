@@ -2,22 +2,21 @@ import type { IOrder } from '../models/order.js'
 import PrintJob from '../models/print-job.js'
 
 const typeLabel: Record<IOrder['type'], string> = {
-    dine_in: 'DINE IN',
-    takeaway: 'TAKE AWAY',
+    dine_in: '內用',
+    takeaway: '外帶',
     uber: 'UBER',
     foodpanda: 'FOODPANDA',
 }
 
 function buildKitchenText(order: IOrder, item: IOrder['items'][number], index: number): string {
-    const dateTime = new Date().toLocaleString('vi-VN', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+    const dateTime = new Date().toLocaleString('zh-TW', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
     const lines = [
         `#${String(order.number).padStart(3, '0')}   ${typeLabel[order.type]}   ${dateTime}`,
-        `${item.name} x${item.quantity}`,
+        `${item.printName || item.name}${item.printVariant || item.variant ? ` (${item.printVariant || item.variant})` : ''} x${item.quantity}`,
     ]
-    if (item.variant) lines.push(`Loại: ${item.variant}`)
-    if (item.noteOptions?.length) lines.push(`- ${item.noteOptions.join(', ')}`)
-    if (item.addons?.length) lines.push(`+ ${item.addons.map((addon) => `${addon.name}${addon.amount > 1 ? ` x${addon.amount}` : ''}`).join(', ')}`)
-    if (item.note) lines.push(`Ghi chú: ${item.note}`)
+    if (item.printNoteOptions?.length || item.noteOptions?.length) lines.push(`不加: ${(item.printNoteOptions || item.noteOptions).join(', ')}`)
+    if (item.printAddons?.length || item.addons?.length) lines.push(`加點: ${(item.printAddons || item.addons).map((addon) => `${addon.printName || addon.name}${addon.amount > 1 ? ` x${addon.amount}` : ''}`).join(', ')}`)
+    if (item.note) lines.push(`備註: ${item.note}`)
     lines.push(`${index + 1}/${order.items.length}`)
     return lines.join('\n')
 }

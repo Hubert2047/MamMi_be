@@ -6,6 +6,7 @@ export interface OrderItemAddon {
     name: string
     priceExtra: number
     amount: number
+    printName?: string
 }
 interface OrderItem {
     id: mongoose.Types.ObjectId
@@ -17,6 +18,10 @@ interface OrderItem {
     addons: OrderItemAddon[]
     noteOptions: string[]
     note: string
+    printName?: string
+    printVariant?: string
+    printAddons?: OrderItemAddon[]
+    printNoteOptions?: string[]
 }
 
 export interface OrderDiscount {
@@ -86,6 +91,10 @@ const OrderItemSchema = new Schema<OrderItem>(
         addons: [OrderItemAddonSchema],
         noteOptions: [String],
         note: String,
+        printName: String,
+        printVariant: String,
+        printAddons: [OrderItemAddonSchema],
+        printNoteOptions: [String],
     },
     { _id: false },
 )
