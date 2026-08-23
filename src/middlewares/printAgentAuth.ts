@@ -1,8 +1,10 @@
 import type { NextFunction, Request, Response } from 'express'
 import { timingSafeEqual } from 'node:crypto'
+import { createHash } from 'node:crypto'
+import PrintAgent from '../models/print-agent.js'
 
 export interface PrintAgentRequest extends Request {
-    printAgent: { agentId: string; storeId: string }
+    printAgent: { agentId: string; agentDbId: string; storeId: string }
 }
 
 const sameSecret = (actual: string, expected: string) => {
@@ -12,13 +14,14 @@ const sameSecret = (actual: string, expected: string) => {
 }
 
 export default function authenticatePrintAgent(req: Request, res: Response, next: NextFunction) {
-    const expectedToken = process.env.PRINT_AGENT_TOKEN
     const token = String(req.headers['x-agent-token'] || '')
-    const storeId = String(req.headers['x-store-id'] || '')
     const agentId = String(req.headers['x-agent-id'] || '')
-    if (!expectedToken || !storeId || !agentId || !sameSecret(token, expectedToken)) {
-        return res.status(401).json({ success: false, message: 'Invalid print agent credentials' })
-    }
-    ;(req as PrintAgentRequest).printAgent = { agentId, storeId }
-    next()
+    if (!token || !agentId) return res.status(401).json({ success: false, message: 'Invalid print agent credentials' })
+    void PrintAgent.findOne({ agentId, active: true }).select('+tokenHash').lean().then((agent) => {
+        const tokenHash = createHash('sha256').update(token).digest('hex')
+        if (!agent || !sameSecret(tokenHash, agent.tokenHash)) return res.status(401).json({ success: false, message: 'Invalid print agent credentials' })
+        void PrintAgent.updateOne({ _id: agent._id }, { $set: { lastSeenAt: new Date() } })
+        ;(req as PrintAgentRequest).printAgent = { agentId, agentDbId: String(agent._id), storeId: String(agent.storeId) }
+        next()
+    }).catch(() => res.status(401).json({ success: false, message: 'Invalid print agent credentials' }))
 }

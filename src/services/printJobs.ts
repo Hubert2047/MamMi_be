@@ -1,5 +1,8 @@
 import type { IOrder } from '../models/order.js'
 import PrintJob from '../models/print-job.js'
+import PrintRouting from '../models/print-routing.js'
+
+const retentionMs = 7 * 24 * 60 * 60 * 1000
 
 const typeLabel: Record<IOrder['type'], string> = {
     dine_in: '內用',
@@ -22,10 +25,13 @@ function buildKitchenText(order: IOrder, item: IOrder['items'][number], index: n
 }
 
 export async function createKitchenPrintJobs(order: IOrder) {
+    const routing = await PrintRouting.findOne({ storeId: order.storeId }).select({ kitchenPrinterId: 1 }).lean()
     await PrintJob.create({
         storeId: order.storeId,
+        ...(routing?.kitchenPrinterId ? { printerId: routing.kitchenPrinterId } : {}),
         orderId: order._id,
         kind: 'kitchen_item' as const,
         payload: { printableText: order.items.map((item, index) => buildKitchenText(order, item, index)).join('\f') },
+        retentionUntil: new Date(Date.now() + retentionMs),
     })
 }
