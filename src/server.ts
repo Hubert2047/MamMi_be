@@ -88,7 +88,7 @@ const app: Application = express()
     
     const httpServer = createServer(app)
     initializeRealtime(httpServer, [process.env.FRONTEND_URL || 'http://localhost:3000', process.env.ORDER_WEB_URL || 'http://localhost:3001'])
-    httpServer.listen(port, () => {
+    httpServer.listen(Number(port), '0.0.0.0', () => {
         console.log(`Server is Fire at http://localhost:${port}`)
     })
 })()

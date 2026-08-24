@@ -1,4 +1,5 @@
 import type { Request, Response } from 'express'
+import { randomBytes } from 'node:crypto'
 import type { AuthRequest } from '../middlewares/auth.js'
 import StoreTable from '../models/store-table.js'
 
@@ -22,4 +23,28 @@ export const createStoreTable = async (req: Request, res: Response) => {
         if (error?.code === 11000) return res.status(409).json({ success: false, message: 'This table code already exists' })
         res.status(400).json({ success: false, message: 'Unable to create table' })
     }
+}
+
+export const regenerateStoreTableQr = async (req: Request, res: Response) => {
+    try {
+        const storeId = (req as AuthRequest).user.storeId
+        const table = await StoreTable.findOneAndUpdate(
+            { _id: String(req.params.id), storeId },
+            { $set: { qrToken: randomBytes(24).toString('base64url') } },
+            { new: true, runValidators: true },
+        ).lean()
+        if (!table) return res.status(404).json({ success: false, message: 'Table not found' })
+        res.json({ success: true, data: table })
+    } catch (error) { res.status(400).json({ success: false, message: 'Unable to regenerate QR code' }) }
+}
+
+export const regenerateAllStoreTableQr = async (req: Request, res: Response) => {
+    try {
+        const storeId = (req as AuthRequest).user.storeId
+        const tables = await StoreTable.find({ storeId }).select({ _id: 1 }).lean()
+        if (tables.length > 0) {
+            await StoreTable.bulkWrite(tables.map((table) => ({ updateOne: { filter: { _id: table._id }, update: { $set: { qrToken: randomBytes(24).toString('base64url') } } } })))
+        }
+        res.json({ success: true, data: { count: tables.length } })
+    } catch (error) { res.status(400).json({ success: false, message: 'Unable to regenerate QR codes' }) }
 }
