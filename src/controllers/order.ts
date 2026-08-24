@@ -73,6 +73,9 @@ export const createOrder = async (req: Request, res: Response) => {
         if (!order.items || order.items.length === 0) {
             return res.status(400).json({ success: false, message: 'Items is required' })
         }
+        if (order.type === 'dine_in' && !String(order.table || '').trim()) {
+            return res.status(400).json({ success: false, code: 'TABLE_REQUIRED', message: 'A table is required for dine-in orders' })
+        }
 
         const itemIds: string[] = [...new Set<string>(order.items.map((item: any) => String(item.id)))]
         const validItemIds = itemIds.filter((id) => mongoose.isValidObjectId(id))
@@ -154,6 +157,7 @@ export const createOrder = async (req: Request, res: Response) => {
             paymentMethod: order.paymentMethod,
             discount: order.discount,
             customer: order.customer,
+            ...(order.type === 'dine_in' ? { table: String(order.table).trim() } : {}),
             source: order.source || 'pos',
             ...(order.externalOrderId ? { externalOrderId: order.externalOrderId } : {}),
             paidAt: getPaidAt(order.status),

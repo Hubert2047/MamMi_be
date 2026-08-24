@@ -34,6 +34,8 @@ import { ensureStoreAddons, ensureStoreCatalog, ensureStoreScopedFinancialData, 
 import { initializeRealtime } from './realtime.js'
 import printAgent from './routers/print-agent.js'
 import printAgentAdmin from './routers/print-agent-admin.js'
+import publicOrder from './routers/public-order.js'
+import storeTable from './routers/store-table.js'
 dotenv.config()
 
 
@@ -53,7 +55,7 @@ const app: Application = express()
     app.use(cookieParser())
     const port = process.env.SERVER_BACKUP_PORT || 8080
     app.use(cors({
-        origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+        origin: [process.env.FRONTEND_URL || 'http://localhost:3000', process.env.ORDER_WEB_URL || 'http://localhost:3001'],
         credentials: true,
     }))
     app.use('/api/webhook', webhook)
@@ -61,12 +63,14 @@ const app: Application = express()
     app.use(express.json())
     app.use('/api/refresh-token', refreshTokenRoutes)
     app.use('/api/auth', auth)
+    app.use('/api/public', publicOrder)
     app.use('/api/items', item)
     app.use('/api/catalog-items', catalogItem)
     app.use('/api/store-items', storeItem)
     app.use('/api/orders', order)
     app.use('/api/categories', category)
     app.use('/api/stores', store)
+    app.use('/api/tables', storeTable)
     app.use('/api/users', user)
     app.use('/api/expenses', expense)
     app.use('/api/units', unit)
@@ -83,7 +87,7 @@ const app: Application = express()
     app.use('/api/print-agents', printAgentAdmin)
     
     const httpServer = createServer(app)
-    initializeRealtime(httpServer, process.env.FRONTEND_URL || 'http://localhost:3000')
+    initializeRealtime(httpServer, [process.env.FRONTEND_URL || 'http://localhost:3000', process.env.ORDER_WEB_URL || 'http://localhost:3001'])
     httpServer.listen(port, () => {
         console.log(`Server is Fire at http://localhost:${port}`)
     })

@@ -48,7 +48,8 @@ export interface IOrder extends Document {
     discount?: OrderDiscount
     paymentMethod: string
     customer: Customer | null
-    source: 'pos' | 'qr' | 'uber' | 'foodpanda'
+    table?: string
+    source: 'pos' | 'qr' | 'online' | 'uber' | 'foodpanda'
     externalOrderId?: string
     version: number
 }
@@ -131,7 +132,8 @@ const OrderSchema = new Schema<IOrder>(
             type: CustomerSchema,
             default: null,
         },
-        source: { type: String, enum: ['pos', 'qr', 'uber', 'foodpanda'], default: 'pos', required: true },
+        table: { type: String, trim: true },
+        source: { type: String, enum: ['pos', 'qr', 'online', 'uber', 'foodpanda'], default: 'pos', required: true },
         externalOrderId: String,
         version: { type: Number, default: 1, required: true },
     },

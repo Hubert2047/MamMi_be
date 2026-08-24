@@ -8,7 +8,9 @@ import { Role } from './constants/role.js'
 
 export type RealtimeChannel = 'catalog' | 'orders' | 'closing'
 export type RealtimeClientType = 'pos' | 'admin' | 'customer' | 'order'
-type SocketUser = { account: string; role: Role; storeId: string }
+type StaffSocketUser = { account: string; role: Role; storeId: string; publicCatalogOnly?: false }
+type PublicCatalogSocketUser = { storeId: string; publicCatalogOnly: true }
+type SocketUser = StaffSocketUser | PublicCatalogSocketUser
 
 const channelForEvent: Record<string, RealtimeChannel> = {
     'catalog.item.updated': 'catalog',
@@ -50,12 +52,22 @@ const canAccessStore = async (account: string, role: Role, storeId: string) => {
 }
 
 const authenticateSocket = async (socket: Socket) => {
+    const publicToken = socket.handshake.auth?.publicToken
+    if (typeof publicToken === 'string') {
+        const secret = process.env.PUBLIC_ORDER_REALTIME_PRIVATE_KEY
+        if (!secret) throw new Error('Public realtime is not configured')
+        const payload = jwt.verify(publicToken, secret) as { scope?: string; storeId?: string }
+        const storeId = String(payload.storeId || '')
+        const store = await Store.findOne({ _id: storeId, active: true }).select({ _id: 1 }).lean()
+        if (payload.scope !== 'public-catalog' || !store) throw new Error('Public catalog access denied')
+        return { storeId, publicCatalogOnly: true } satisfies PublicCatalogSocketUser
+    }
     const token = socket.handshake.auth?.token
     if (typeof token !== 'string') throw new Error('Missing access token')
     const payload = jwt.verify(token, process.env.ACCESS_TOKEN_PRIVATE_KEY as string) as { account: string; role: Role; storeId: string }
     const storeId = String(socket.handshake.auth?.storeId || payload.storeId || '')
     if (!storeId || !(await canAccessStore(payload.account, payload.role, storeId))) throw new Error('Store access denied')
-    return { ...payload, storeId }
+    return { ...payload, storeId } satisfies StaffSocketUser
 }
 
 const clientTypeOf = (socket: Socket): RealtimeClientType => {
@@ -70,12 +82,16 @@ const leaveStoreRooms = (socket: Socket, storeId: string) => {
 
 const joinStoreRooms = (socket: Socket, storeId: string) => {
     const user = socket.data.user as SocketUser
+    if (user.publicCatalogOnly) {
+        socket.join(roomForStoreChannel(storeId, 'catalog'))
+        return
+    }
     const clientType = socket.data.clientType as RealtimeClientType
     socket.join(roomForStore(storeId))
     for (const channel of channelsForClient(clientType, user.role)) socket.join(roomForStoreChannel(storeId, channel))
 }
 
-export const initializeRealtime = (httpServer: HttpServer, origin: string) => {
+export const initializeRealtime = (httpServer: HttpServer, origin: string | string[]) => {
     io = new SocketIOServer(httpServer, {
         cors: { origin, credentials: true },
         transports: ['websocket', 'polling'],
@@ -95,6 +111,7 @@ export const initializeRealtime = (httpServer: HttpServer, origin: string) => {
         socket.on('store:join', async (storeId: string, acknowledge?: (result: { ok: boolean }) => void) => {
             try {
                 const socketUser = socket.data.user as SocketUser
+                if (socketUser.publicCatalogOnly) return acknowledge?.({ ok: false })
                 const nextStoreId = String(storeId)
                 if (!(await canAccessStore(socketUser.account, socketUser.role, nextStoreId))) return acknowledge?.({ ok: false })
                 leaveStoreRooms(socket, socketUser.storeId)
@@ -108,6 +125,7 @@ export const initializeRealtime = (httpServer: HttpServer, origin: string) => {
         socket.on('order:join', async (orderId: string, acknowledge?: (result: { ok: boolean }) => void) => {
             try {
                 const socketUser = socket.data.user as SocketUser
+                if (socketUser.publicCatalogOnly) return acknowledge?.({ ok: false })
                 const order = await Order.findOne({ _id: String(orderId), storeId: socketUser.storeId }).select({ _id: 1 }).lean()
                 if (!order) return acknowledge?.({ ok: false })
                 socket.join(roomForOrder(String(order._id)))
