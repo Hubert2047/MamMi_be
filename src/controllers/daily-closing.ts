@@ -8,6 +8,7 @@ import { calculateActualCash, canVoidLatestClosing, isValidCashData, requiresClo
 import { getDailyClosingSummary as loadDailyClosingSummary } from '../services/dailyClosingSummary.js'
 import type { AuthRequest } from '../middlewares/auth.js'
 import { emitStoreEvent } from '../realtime.js'
+import { enqueueClosingBackup } from '../services/backupJobs.js'
 
 export const createDailyClosing = async (req: Request, res: Response) => {
     try {
@@ -49,6 +50,12 @@ export const createDailyClosing = async (req: Request, res: Response) => {
             confirmedBy: (req as AuthRequest).user?.account,
         })
         await dailyClosing.save()
+        try {
+            await enqueueClosingBackup(dailyClosing._id, dailyClosing.storeId)
+        } catch (backupJobError) {
+            // Cloud backup is asynchronous and must never prevent a completed closing.
+            console.error('Unable to enqueue closing backup', backupJobError)
+        }
         emitStoreEvent(storeId, 'closing.created', { closingId: String(dailyClosing._id), periodStart: dailyClosing.periodStart, periodEnd: dailyClosing.periodEnd })
         const now = toZonedTime(new Date(), TIME_ZONE)
         const formatted = format(now, 'dd/MM/yyyy HH:mm')
