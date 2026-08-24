@@ -338,8 +338,9 @@ export const updateOrderPayment = async (req: Request, res: Response) => {
         const id = String(req.params.id)
         const { paymentMethod, version } = req.body
         const storeId = (req as AuthRequest).user.storeId
-        const order = await Order.findOne({ _id: id, storeId }).select({ paidAt: 1 }).lean()
+        const order = await Order.findOne({ _id: id, storeId }).select({ paidAt: 1, status: 1 }).lean()
         if (!order) return res.status(404).json({ success: false, message: 'Order not found' })
+        if (order.status !== 'paid') return res.status(400).json({ success: false, code: 'ORDER_NOT_PAID', message: 'Only paid orders can change payment method' })
         if (order.paidAt) await assertFinancialPeriodOpen(storeId, order.paidAt)
         const updated = await Order.findOneAndUpdate({ _id: id, storeId, version }, { $set: { paymentMethod }, $inc: { version: 1 } }, { returnDocument: 'after', includeResultMetadata: false })
         if (!updated) return res.status(409).json({ success: false, code: 'ORDER_VERSION_CONFLICT', message: 'Order was changed by another device' })
@@ -359,5 +360,60 @@ export const updateOrderPayment = async (req: Request, res: Response) => {
             message: 'Error updating order',
             error,
         })
+    }
+}
+
+/** Updates a pending order from the POS while preserving its number and financial period. */
+export const updatePendingOrder = async (req: Request, res: Response) => {
+    try {
+        const id = String(req.params.id)
+        const { items, type, table, discount, paymentMethod, version } = req.body
+        const storeId = (req as AuthRequest).user.storeId
+
+        if (!Array.isArray(items) || items.length === 0) {
+            return res.status(400).json({ success: false, code: 'ITEMS_REQUIRED', message: 'Items is required' })
+        }
+        if (type === 'dine_in' && !String(table || '').trim()) {
+            return res.status(400).json({ success: false, code: 'TABLE_REQUIRED', message: 'A table is required for dine-in orders' })
+        }
+
+        const itemIds = [...new Set<string>(items.map((item: any) => String(item.id)))]
+        const validItemIds = itemIds.filter((itemId) => mongoose.isValidObjectId(itemId))
+        if (validItemIds.length !== itemIds.length) return res.status(400).json({ success: false, code: 'ITEM_NOT_AVAILABLE', message: 'One or more selected products are no longer available' })
+        await StoreItem.updateMany({ storeId, temporarilyUnavailable: true, temporarilyUnavailableUntil: { $lte: new Date() } }, { $set: { temporarilyUnavailable: false }, $unset: { temporarilyUnavailableUntil: 1 } })
+        const availableItems = await StoreItem.countDocuments({ storeId, itemId: { $in: validItemIds }, permanentlyActive: { $ne: false }, temporarilyUnavailable: false })
+        if (availableItems !== validItemIds.length) return res.status(400).json({ success: false, code: 'ITEM_NOT_AVAILABLE', message: 'One or more selected products are no longer available' })
+
+        const addonIds = [...new Set<string>(items.flatMap((item: any) => Array.isArray(item.addons) ? item.addons.map((addon: any) => String(addon.id)) : []))]
+        const validAddonIds = addonIds.filter((addonId) => mongoose.isValidObjectId(addonId))
+        if (validAddonIds.length !== addonIds.length) return res.status(400).json({ success: false, code: 'ADDON_NOT_AVAILABLE', message: 'One or more selected add-ons are no longer available' })
+        if (validAddonIds.length) {
+            await StoreAddon.updateMany({ storeId, temporarilyUnavailable: true, temporarilyUnavailableUntil: { $lte: new Date() } }, { $set: { temporarilyUnavailable: false }, $unset: { temporarilyUnavailableUntil: 1 } })
+            const availableAddons = await StoreAddon.countDocuments({ storeId, addonId: { $in: validAddonIds }, permanentlyActive: { $ne: false }, temporarilyUnavailable: false })
+            if (availableAddons !== validAddonIds.length) return res.status(400).json({ success: false, code: 'ADDON_NOT_AVAILABLE', message: 'One or more selected add-ons are no longer available' })
+        }
+
+        const updated = await Order.findOneAndUpdate(
+            { _id: id, storeId, status: 'pending', version },
+            {
+                $set: {
+                    items,
+                    type,
+                    table: type === 'dine_in' ? String(table).trim() : '',
+                    discount: discount || null,
+                    paymentMethod,
+                    totalPrice: calculateTotal(items, discount),
+                },
+                $inc: { version: 1 },
+            },
+            { returnDocument: 'after', includeResultMetadata: false },
+        )
+        if (!updated) return res.status(409).json({ success: false, code: 'ORDER_VERSION_CONFLICT', message: 'Order was changed by another device or is no longer pending' })
+
+        emitStoreEvent(storeId, 'order.updated', { orderId: String(updated._id), changedFields: ['items', 'type', 'table', 'discount', 'paymentMethod', 'totalPrice'] })
+        res.json({ success: true, data: updated })
+    } catch (error) {
+        console.error('Error updating pending order:', error)
+        res.status(400).json({ success: false, message: 'Error updating order', error })
     }
 }
