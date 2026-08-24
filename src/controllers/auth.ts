@@ -131,8 +131,11 @@ export async function ensureDefaultUsers() {
     )
     if (!store) throw new Error('Unable to initialize default store')
     await User.updateMany({ active: { $exists: false } }, { $set: { active: true } })
-    const account = 'superadmin'
-    const password = 'Hubert*17041993'
+    const account = process.env.DEFAULT_SUPERADMIN_ACCOUNT?.trim()
+    const password = process.env.DEFAULT_SUPERADMIN_PASSWORD
+    if (!account || !password) {
+        throw new Error('DEFAULT_SUPERADMIN_ACCOUNT and DEFAULT_SUPERADMIN_PASSWORD must be configured')
+    }
     const hashPassword = await bcrypt.hash(password, Number(process.env.SALT) || 10)
     await User.findOneAndUpdate(
         { account },
