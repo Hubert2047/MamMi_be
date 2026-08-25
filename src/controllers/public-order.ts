@@ -13,6 +13,13 @@ import { emitStoreEvent } from '../realtime.js'
 
 const CART_TTL_MS = 2 * 60 * 60 * 1000
 const activeTableForToken = (token: string) => StoreTable.findOne({ qrToken: token, active: true }).lean()
+const mainOnlineStore = () => Store.findOne({ isMain: true, active: true }).select({ name: 1 }).lean()
+
+const publicRealtimeTokenForStore = (storeId: string) => {
+    const realtimeSecret = process.env.PUBLIC_ORDER_REALTIME_PRIVATE_KEY
+    if (!realtimeSecret) throw new Error('PUBLIC_ORDER_REALTIME_PRIVATE_KEY is not configured')
+    return jwt.sign({ scope: 'public-catalog', storeId }, realtimeSecret, { expiresIn: '15m' })
+}
 
 export const getQrMenu = async (req: Request, res: Response) => {
     try {
@@ -21,9 +28,7 @@ export const getQrMenu = async (req: Request, res: Response) => {
         const store = await Store.findOne({ _id: table.storeId, active: true }).select({ name: 1 }).lean()
         if (!store) return res.status(404).json({ success: false, code: 'STORE_NOT_AVAILABLE', message: 'Store is not available' })
         const items = await getPublicMenu(String(table.storeId))
-        const realtimeSecret = process.env.PUBLIC_ORDER_REALTIME_PRIVATE_KEY
-        if (!realtimeSecret) throw new Error('PUBLIC_ORDER_REALTIME_PRIVATE_KEY is not configured')
-        const realtimeToken = jwt.sign({ scope: 'public-catalog', storeId: String(table.storeId) }, realtimeSecret, { expiresIn: '15m' })
+        const realtimeToken = publicRealtimeTokenForStore(String(table.storeId))
         res.json({ success: true, data: { store: { name: store.name }, table: { code: table.code, name: table.name }, items, realtimeToken } })
     } catch (error) {
         console.error('Error fetching QR menu:', error)
@@ -35,8 +40,32 @@ export const createGuestCart = async (req: Request, res: Response) => {
     try {
         const table = await activeTableForToken(String(req.params.token))
         if (!table) return res.status(404).json({ success: false, code: 'QR_NOT_FOUND', message: 'QR code is not active' })
-        const cart = await GuestCart.create({ storeId: table.storeId, table: table.code, lines: [], expiresAt: new Date(Date.now() + CART_TTL_MS) })
+        const cart = await GuestCart.create({ storeId: table.storeId, source: 'qr', type: 'dine_in', table: table.code, lines: [], expiresAt: new Date(Date.now() + CART_TTL_MS) })
         res.status(201).json({ success: true, data: { cartToken: cart.cartToken, table: cart.table, lines: cart.lines } })
+    } catch { res.status(500).json({ success: false, message: 'Unable to create cart' }) }
+}
+
+export const getOnlineMenu = async (_req: Request, res: Response) => {
+    try {
+        const store = await mainOnlineStore()
+        if (!store) return res.status(404).json({ success: false, code: 'STORE_NOT_AVAILABLE', message: 'Main store is not available' })
+        const items = await getPublicMenu(String(store._id))
+        const realtimeToken = publicRealtimeTokenForStore(String(store._id))
+        res.json({ success: true, data: { store: { name: store.name }, items, realtimeToken } })
+    } catch (error) {
+        console.error('Error fetching online menu:', error)
+        res.status(500).json({ success: false, message: 'Unable to fetch online menu' })
+    }
+}
+
+export const createOnlineGuestCart = async (req: Request, res: Response) => {
+    const type = req.body?.type
+    if (type !== 'dine_in' && type !== 'takeaway') return res.status(400).json({ success: false, code: 'INVALID_ORDER_TYPE', message: 'Order type must be dine-in or takeaway' })
+    try {
+        const store = await mainOnlineStore()
+        if (!store) return res.status(404).json({ success: false, code: 'STORE_NOT_AVAILABLE', message: 'Main store is not available' })
+        const cart = await GuestCart.create({ storeId: store._id, source: 'online', type, table: '', lines: [], expiresAt: new Date(Date.now() + CART_TTL_MS) })
+        res.status(201).json({ success: true, data: { cartToken: cart.cartToken, type: cart.type, lines: cart.lines } })
     } catch { res.status(500).json({ success: false, message: 'Unable to create cart' }) }
 }
 
@@ -49,9 +78,14 @@ export const getGuestCart = async (req: Request, res: Response) => {
 export const updateGuestCart = async (req: Request, res: Response) => {
     const lines = Array.isArray(req.body.lines) ? req.body.lines : null
     if (!lines || lines.some((line: any) => !line.itemId || !Number.isInteger(line.quantity) || line.quantity < 1 || line.quantity > 99 || !Array.isArray(line.noteOptions) || !Array.isArray(line.addonIds))) return res.status(400).json({ success: false, message: 'Invalid cart lines' })
-    const cart = await GuestCart.findOneAndUpdate({ cartToken: String(req.params.cartToken), status: 'draft' }, { $set: { lines, expiresAt: new Date(Date.now() + CART_TTL_MS) } }, { returnDocument: 'after', includeResultMetadata: false })
+    const update: any = { lines, expiresAt: new Date(Date.now() + CART_TTL_MS) }
+    if (req.body.type !== undefined) {
+        if (req.body.type !== 'dine_in' && req.body.type !== 'takeaway') return res.status(400).json({ success: false, code: 'INVALID_ORDER_TYPE', message: 'Order type must be dine-in or takeaway' })
+        update.type = req.body.type
+    }
+    const cart = await GuestCart.findOneAndUpdate({ cartToken: String(req.params.cartToken), status: 'draft' }, { $set: update }, { returnDocument: 'after', includeResultMetadata: false })
     if (!cart) return res.status(409).json({ success: false, code: 'CART_LOCKED', message: 'Cart is unavailable' })
-    res.json({ success: true, data: { cartToken: cart.cartToken, table: cart.table, lines: cart.lines } })
+    res.json({ success: true, data: { cartToken: cart.cartToken, table: cart.table, type: cart.type, lines: cart.lines } })
 }
 
 export const confirmGuestCart = async (req: Request, res: Response) => {
@@ -70,11 +104,18 @@ export const confirmGuestCart = async (req: Request, res: Response) => {
             return { id: line.itemId, itemId: randomBytes(12).toString('hex'), name: item.names.vi || item.names.en || '', quantity: line.quantity, basePrice: item.price, variant: line.variant || '', addons, noteOptions: line.noteOptions, note: String(line.note || '').slice(0, 300) }
         })
         const periodId = await getCurrentOrderPeriodId(String(cart.storeId)); const sequence = await allocateOrderSequence(String(cart.storeId), periodId)
-        const order = await new Order({ storeId: cart.storeId, number: sequence, sequence, periodId, items, totalPrice: calculateTotal(items, null), status: 'pending', type: 'dine_in', table: cart.table, paymentMethod: 'cash', customer: null, source: 'qr' }).save()
+        const source = cart.source || 'qr'
+        const customer = source === 'online' ? {
+            name: typeof req.body?.customer?.name === 'string' ? req.body.customer.name.trim().slice(0, 120) : undefined,
+            phone: typeof req.body?.customer?.phone === 'string' ? req.body.customer.phone.trim().slice(0, 40) : undefined,
+            address: typeof req.body?.customer?.address === 'string' ? req.body.customer.address.trim().slice(0, 300) : undefined,
+        } : null
+        if (source === 'online' && !customer?.phone) throw new Error('PHONE_REQUIRED')
+        const order = await new Order({ storeId: cart.storeId, number: sequence, sequence, periodId, items, totalPrice: calculateTotal(items, null), status: 'pending', type: cart.type || 'dine_in', table: cart.table || '', paymentMethod: 'cash', customer, source }).save()
         await GuestCart.updateOne({ _id: cart._id }, { $set: { status: 'confirmed', orderId: order._id, expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) } })
         try { await createKitchenPrintJobs(order) } catch (error) { console.error('Failed to queue QR kitchen print jobs:', error) }
-        emitStoreEvent(String(cart.storeId), 'order.created', { orderId: String(order._id), source: 'qr' })
-        res.status(201).json({ success: true, data: { number: sequence, orderId: String(order._id), table: cart.table } })
+        emitStoreEvent(String(cart.storeId), 'order.created', { orderId: String(order._id), source })
+        res.status(201).json({ success: true, data: { number: sequence, orderId: String(order._id), table: cart.table, type: cart.type, source } })
     } catch (error: any) {
         await GuestCart.updateOne({ _id: cart._id, status: 'confirming' }, { $set: { status: 'draft' } })
         const code = error?.message || 'ORDER_CONFIRM_FAILED'

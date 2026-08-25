@@ -126,7 +126,7 @@ export const getLoginStores = async (req: Request, res: Response) => {
 export async function ensureDefaultUsers() {
     const store = await Store.findOneAndUpdate(
         { code: 'main' },
-        { $setOnInsert: { code: 'main', name: 'Cửa hàng chính', timezone: 'Asia/Taipei' } },
+        { $set: { isMain: true }, $setOnInsert: { code: 'main', name: 'Cửa hàng chính', timezone: 'Asia/Taipei' } },
         { upsert: true, returnDocument: 'after' },
     )
     if (!store) throw new Error('Unable to initialize default store')

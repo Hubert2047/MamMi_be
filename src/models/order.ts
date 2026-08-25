@@ -30,8 +30,9 @@ export interface OrderDiscount {
     type: 'percent' | 'value'
 }
 interface Customer {
-    name: string
-    phone: string
+    name?: string
+    phone?: string
+    address?: string
 }
 export interface IOrder extends Document {
     storeId: mongoose.Types.ObjectId
@@ -57,6 +58,7 @@ const CustomerSchema = new Schema<Customer>(
     {
         name: String,
         phone: String,
+        address: String,
     },
     { _id: false },
 )
