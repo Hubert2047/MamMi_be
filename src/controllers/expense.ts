@@ -48,8 +48,13 @@ export const getExpenses = async (req: Request, res: Response) => {
         const expenses = await Expense.find(filter).sort({ createdAt: -1 }).lean()
         const inventoryExpenseIds = expenses.filter((expense) => expense.type === 'inventory_purchase').map((expense) => expense._id)
         const receipts = await InventoryReceipt.find({ storeId, expenseId: { $in: inventoryExpenseIds } }).populate('lines.inventoryItemId', 'name').lean()
-        const receiptNames = new Map(receipts.map((receipt: any) => [String(receipt.expenseId), [...new Set(receipt.lines.map((line: any) => line.inventoryItemId?.name).filter(Boolean))].join(', ')]))
-        const result = expenses.map((expense) => ({ ...expense, name: receiptNames.get(String(expense._id)) || expense.name }))
+        const receiptByExpense = new Map(receipts.map((receipt: any) => [String(receipt.expenseId), receipt]))
+        const result = expenses.map((expense) => {
+            const receipt: any = receiptByExpense.get(String(expense._id))
+            const firstLine = receipt?.lines?.[0]
+            const name = receipt ? [...new Set(receipt.lines.map((line: any) => line.inventoryItemId?.name).filter(Boolean))].join(', ') || expense.name : expense.name
+            return receipt && firstLine ? { ...expense, name, quantity: firstLine.quantity, unit: firstLine.unitCode, unitPrice: firstLine.unitPrice, price: receipt.totalAmount, receipt: { _id: String(receipt._id), lines: receipt.lines.map((line: any) => ({ inventoryItemId: String(line.inventoryItemId?._id || line.inventoryItemId), quantity: line.quantity, unitCode: line.unitCode, unitPrice: line.unitPrice })) } } : { ...expense, name }
+        })
         res.json({ success: true, data: result })
     } catch (error) {
         console.error(error)
@@ -60,8 +65,9 @@ export const deleteExpense = async (req: Request, res: Response) => {
     try {
         const id = String(req.params.id)
         const storeId = (req as AuthRequest).user.storeId
-        const expense = await Expense.findOne({ _id: id, storeId }).select({ createdAt: 1, quantity: 1, unitPrice: 1, price: 1 }).lean()
+        const expense = await Expense.findOne({ _id: id, storeId }).select({ createdAt: 1, quantity: 1, unitPrice: 1, price: 1, type: 1 }).lean()
         if (!expense) return res.status(404).json({ success: false, message: 'Expense not found' })
+        if (expense.type === 'inventory_purchase') return res.status(409).json({ success: false, code: 'INVENTORY_RECEIPT_REQUIRED', message: 'Edit or delete inventory purchases through their receipt' })
         await assertFinancialPeriodOpen(storeId, expense.createdAt)
 
         const deletedExpense = await Expense.findOneAndDelete({ _id: id, storeId })
@@ -101,8 +107,9 @@ export const updateExpense = async (req: Request, res: Response) => {
                 message: 'Thiếu id',
             })
         }
-        const expense = await Expense.findOne({ _id: id, storeId }).select({ createdAt: 1, quantity: 1, unitPrice: 1, price: 1 }).lean()
+        const expense = await Expense.findOne({ _id: id, storeId }).select({ createdAt: 1, quantity: 1, unitPrice: 1, price: 1, type: 1 }).lean()
         if (!expense) return res.status(404).json({ success: false, message: 'Expense not found' })
+        if (expense.type === 'inventory_purchase') return res.status(409).json({ success: false, code: 'INVENTORY_RECEIPT_REQUIRED', message: 'Edit or delete inventory purchases through their receipt' })
         await assertFinancialPeriodOpen(storeId, expense.createdAt)
 
         const normalizedQuantity = Number(data.quantity ?? expense.quantity ?? 1)

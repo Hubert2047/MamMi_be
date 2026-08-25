@@ -7,6 +7,8 @@ export interface IInventoryItem extends Document {
     name: string
     stockUnitCode: string
     purchaseUnits: IPurchaseUnit[]
+    currentQuantity: number
+    lastStocktakeAt?: Date
     minimumStock: number
     active: boolean
     note?: string
@@ -17,6 +19,8 @@ const InventoryItemSchema = new Schema<IInventoryItem>({
     name: { type: String, required: true, trim: true },
     stockUnitCode: { type: String, required: true, trim: true, lowercase: true },
     purchaseUnits: [{ unitCode: { type: String, required: true }, conversionFactor: { type: Number, required: true, min: 0.000001 } }],
+    currentQuantity: { type: Number, default: 0, min: 0 },
+    lastStocktakeAt: Date,
     minimumStock: { type: Number, default: 0, min: 0 },
     active: { type: Boolean, default: true },
     note: String,
