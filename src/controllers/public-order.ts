@@ -13,6 +13,8 @@ import { createKitchenPrintJobs } from '../services/printJobs.js'
 import { emitStoreEvent } from '../realtime.js'
 
 const CART_TTL_MS = 2 * 60 * 60 * 1000
+const QR_ORDER_WINDOW_MS = 60 * 1000
+const MAX_QR_ORDERS_PER_WINDOW = 8
 const activeTableForToken = (token: string) => StoreTable.findOne({ qrToken: token, active: true }).lean()
 const activeSessionForTable = (storeId: any, tableId: any) => TableSession.findOne({ storeId, tableId, status: 'active', expiresAt: { $gt: new Date() } }).lean()
 const activeSessionForId = (storeId: any, sessionId: any) => TableSession.findOne({ _id: sessionId, storeId, status: 'active', expiresAt: { $gt: new Date() } }).lean()
@@ -30,6 +32,22 @@ const requireActiveCartSession = async (cart: { source?: string; storeId: unknow
     if ((cart.source || 'qr') !== 'qr') return true
     if (!cart.tableSessionId) return false
     return Boolean(await activeSessionForId(cart.storeId, cart.tableSessionId))
+}
+
+const reserveQrOrderSlot = async (storeId: any, sessionId: any) => {
+    const now = new Date()
+    const cutoff = new Date(now.getTime() - QR_ORDER_WINDOW_MS)
+    const reset = await TableSession.findOneAndUpdate(
+        { _id: sessionId, storeId, status: 'active', expiresAt: { $gt: now }, $or: [{ qrOrderWindowStartedAt: { $lte: cutoff } }, { qrOrderWindowStartedAt: { $exists: false } }] },
+        { $set: { qrOrderWindowStartedAt: now, qrOrderWindowCount: 1 } },
+        { new: true },
+    ).lean()
+    if (reset) return true
+    return Boolean(await TableSession.findOneAndUpdate(
+        { _id: sessionId, storeId, status: 'active', expiresAt: { $gt: now }, qrOrderWindowStartedAt: { $gt: cutoff }, qrOrderWindowCount: { $lt: MAX_QR_ORDERS_PER_WINDOW } },
+        { $inc: { qrOrderWindowCount: 1 } },
+        { new: true },
+    ).lean())
 }
 const mainOnlineStore = () => Store.findOne({ isMain: true, active: true }).select({ name: 1 }).lean()
 
@@ -130,6 +148,7 @@ export const confirmGuestCart = async (req: Request, res: Response) => {
     const draft = await GuestCart.findOne({ cartToken: String(req.params.cartToken), status: 'draft' }).select({ source: 1, storeId: 1, tableSessionId: 1 }).lean()
     if (!draft) return res.status(409).json({ success: false, code: 'CART_LOCKED', message: 'Cart was already confirmed or is unavailable' })
     if (!(await requireActiveCartSession(draft))) return res.status(409).json({ success: false, code: 'SESSION_EXPIRED', message: 'Table ordering session is not active' })
+    if ((draft.source || 'qr') === 'qr' && !(await reserveQrOrderSlot(draft.storeId, draft.tableSessionId))) return res.status(429).json({ success: false, code: 'QR_ORDER_RATE_LIMITED', message: 'Too many orders were sent for this table session' })
     if ((draft.source || 'qr') === 'online') {
         try {
             if (!(await verifyTurnstile(req.body?.turnstileToken))) return res.status(400).json({ success: false, code: 'TURNSTILE_FAILED', message: 'Human verification failed' })

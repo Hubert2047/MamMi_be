@@ -10,6 +10,8 @@ export interface ITableSession extends Document {
     expiresAt: Date
     lastExtendedAt?: Date
     closedAt?: Date
+    qrOrderWindowStartedAt?: Date
+    qrOrderWindowCount: number
 }
 
 const TableSessionSchema = new Schema<ITableSession>({
@@ -20,6 +22,8 @@ const TableSessionSchema = new Schema<ITableSession>({
     expiresAt: { type: Date, required: true },
     lastExtendedAt: Date,
     closedAt: Date,
+    qrOrderWindowStartedAt: Date,
+    qrOrderWindowCount: { type: Number, default: 0, required: true },
 }, { timestamps: true })
 
 TableSessionSchema.index({ storeId: 1, tableId: 1, status: 1 }, { unique: true, partialFilterExpression: { status: 'active' } })
