@@ -21,6 +21,20 @@ const publicRealtimeTokenForStore = (storeId: string) => {
     return jwt.sign({ scope: 'public-catalog', storeId }, realtimeSecret, { expiresIn: '15m' })
 }
 
+const verifyTurnstile = async (token: unknown) => {
+    const secret = process.env.TURNSTILE_SECRET_KEY
+    if (!secret) throw new Error('TURNSTILE_NOT_CONFIGURED')
+    if (typeof token !== 'string' || !token.trim()) return false
+    const response = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ secret, response: token.trim() }),
+    })
+    if (!response.ok) return false
+    const result = await response.json() as { success?: boolean; action?: string }
+    return result.success === true && (!result.action || result.action === 'online_order')
+}
+
 export const getQrMenu = async (req: Request, res: Response) => {
     try {
         const table = await activeTableForToken(String(req.params.token))
@@ -89,6 +103,16 @@ export const updateGuestCart = async (req: Request, res: Response) => {
 }
 
 export const confirmGuestCart = async (req: Request, res: Response) => {
+    const draft = await GuestCart.findOne({ cartToken: String(req.params.cartToken), status: 'draft' }).select({ source: 1 }).lean()
+    if (!draft) return res.status(409).json({ success: false, code: 'CART_LOCKED', message: 'Cart was already confirmed or is unavailable' })
+    if ((draft.source || 'qr') === 'online') {
+        try {
+            if (!(await verifyTurnstile(req.body?.turnstileToken))) return res.status(400).json({ success: false, code: 'TURNSTILE_FAILED', message: 'Human verification failed' })
+        } catch (error: any) {
+            if (error?.message === 'TURNSTILE_NOT_CONFIGURED') return res.status(500).json({ success: false, code: error.message, message: 'Human verification is not configured' })
+            throw error
+        }
+    }
     const cart = await GuestCart.findOneAndUpdate({ cartToken: String(req.params.cartToken), status: 'draft' }, { $set: { status: 'confirming' } }, { returnDocument: 'after', includeResultMetadata: false })
     if (!cart) return res.status(409).json({ success: false, code: 'CART_LOCKED', message: 'Cart was already confirmed or is unavailable' })
     try {
@@ -119,6 +143,6 @@ export const confirmGuestCart = async (req: Request, res: Response) => {
     } catch (error: any) {
         await GuestCart.updateOne({ _id: cart._id, status: 'confirming' }, { $set: { status: 'draft' } })
         const code = error?.message || 'ORDER_CONFIRM_FAILED'
-        res.status(400).json({ success: false, code, message: 'Unable to confirm order' })
+        res.status(code === 'TURNSTILE_NOT_CONFIGURED' ? 500 : 400).json({ success: false, code, message: 'Unable to confirm order' })
     }
 }
