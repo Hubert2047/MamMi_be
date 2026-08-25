@@ -1,10 +1,10 @@
-import { createHash, randomBytes } from 'node:crypto'
+import { createHash, randomBytes, randomInt } from 'node:crypto'
 import type { Request, Response } from 'express'
 import PosDevice from '../models/pos-device.js'
 import type { AuthRequest } from '../middlewares/auth.js'
 
 const hash = (value: string) => createHash('sha256').update(value).digest('hex')
-const enrollmentCode = () => randomBytes(9).toString('base64url')
+const enrollmentCode = () => randomInt(100000, 1000000).toString()
 const deviceToken = () => randomBytes(32).toString('base64url')
 const cookieOptions = { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'strict' as const, maxAge: 1000 * 60 * 60 * 24 * 365 }
 
@@ -85,6 +85,13 @@ export const updatePosDevice = async (req: Request, res: Response) => {
     } catch (error: any) {
         res.status(error?.code === 11000 ? 409 : 400).json({ success: false, message: error?.code === 11000 ? 'Device name already exists' : 'Unable to update POS device' })
     }
+}
+
+export const deletePosDevice = async (req: Request, res: Response) => {
+    const storeId = (req as AuthRequest).user.storeId
+    const result = await PosDevice.deleteOne({ _id: String(req.params.id), storeId })
+    if (!result.deletedCount) return res.status(404).json({ success: false, message: 'POS device not found' })
+    res.json({ success: true })
 }
 
 export const enrollPosDevice = async (req: Request, res: Response) => {

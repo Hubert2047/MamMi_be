@@ -5,6 +5,8 @@ import Store from './models/store.js'
 import User from './models/user.js'
 import Order from './models/order.js'
 import { Role } from './constants/role.js'
+import PosDevice from './models/pos-device.js'
+import { createHash } from 'node:crypto'
 
 export type RealtimeChannel = 'catalog' | 'orders' | 'closing'
 export type RealtimeClientType = 'pos' | 'admin' | 'customer' | 'order'
@@ -63,7 +65,15 @@ const authenticateSocket = async (socket: Socket) => {
         return { storeId, publicCatalogOnly: true } satisfies PublicCatalogSocketUser
     }
     const token = socket.handshake.auth?.token
-    if (typeof token !== 'string') throw new Error('Missing access token')
+    if (typeof token !== 'string') {
+        const cookieHeader = socket.handshake.headers.cookie || ''
+        const deviceToken = cookieHeader.match(/(?:^|;\s*)pos_device_session=([^;]+)/)?.[1]
+        if (!deviceToken) throw new Error('Missing access token')
+        const tokenHash = createHash('sha256').update(decodeURIComponent(deviceToken)).digest('hex')
+        const device = await PosDevice.findOne({ deviceTokenHash: tokenHash, active: true }).lean()
+        if (!device) throw new Error('Invalid device session')
+        return { account: `device:${device._id}`, role: Role.Employee, storeId: String(device.storeId) } satisfies StaffSocketUser
+    }
     const payload = jwt.verify(token, process.env.ACCESS_TOKEN_PRIVATE_KEY as string) as { account: string; role: Role; storeId: string }
     const storeId = String(socket.handshake.auth?.storeId || payload.storeId || '')
     if (!storeId || !(await canAccessStore(payload.account, payload.role, storeId))) throw new Error('Store access denied')

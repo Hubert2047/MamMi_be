@@ -55,8 +55,16 @@ const app: Application = express()
     }
     app.use(cookieParser())
     const port = process.env.SERVER_BACKUP_PORT || 8080
+    const allowedOrigins = Array.from(new Set([
+        process.env.FRONTEND_URL || 'http://localhost:3000',
+        process.env.ORDER_WEB_URL || 'http://localhost:3001',
+        'http://localhost:3000',
+        'http://localhost:3001',
+        'http://127.0.0.1:3000',
+        'http://127.0.0.1:3001',
+    ]))
     app.use(cors({
-        origin: [process.env.FRONTEND_URL || 'http://localhost:3000', process.env.ORDER_WEB_URL || 'http://localhost:3001'],
+        origin: allowedOrigins,
         credentials: true,
     }))
     app.use('/api/webhook', webhook)
@@ -89,7 +97,7 @@ const app: Application = express()
     app.use('/api/print-agents', printAgentAdmin)
     
     const httpServer = createServer(app)
-    initializeRealtime(httpServer, [process.env.FRONTEND_URL || 'http://localhost:3000', process.env.ORDER_WEB_URL || 'http://localhost:3001'])
+    initializeRealtime(httpServer, allowedOrigins)
     httpServer.listen(Number(port), '0.0.0.0', () => {
         console.log(`Server is Fire at http://localhost:${port}`)
     })

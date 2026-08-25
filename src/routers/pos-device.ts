@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import authenticateToken, { Role } from '../middlewares/auth.js'
 import authorizationPermissions from '../middlewares/permissions.js'
-import { createPosDevice, deleteEnrollment, enrollPosDevice, generateEnrollment, getPosDeviceSession, listPosDevices, reenrollPosDevice, updatePosDevice } from '../controllers/pos-device.js'
+import { createPosDevice, deleteEnrollment, deletePosDevice, enrollPosDevice, generateEnrollment, getPosDeviceSession, listPosDevices, reenrollPosDevice, updatePosDevice } from '../controllers/pos-device.js'
 
 const router = Router()
 router.post('/enroll', enrollPosDevice)
@@ -13,5 +13,6 @@ router.post('/:id/enrollment-code', generateEnrollment)
 router.delete('/:id/enrollment-code', deleteEnrollment)
 router.post('/:id/re-enroll', reenrollPosDevice)
 router.patch('/:id', updatePosDevice)
+router.delete('/:id', deletePosDevice)
 
 export default router

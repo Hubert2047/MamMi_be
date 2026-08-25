@@ -97,9 +97,10 @@ export const updateCatalogItem = async (req: Request, res: Response) => {
 export const deleteCatalogItem = async (req: Request, res: Response) => {
     try {
         const id = String(req.params.id)
-        if (await StoreItem.exists({ itemId: id })) return res.status(409).json({ success: false, message: 'Remove this product from every store menu before deleting it' })
-        const item = await Item.findByIdAndDelete(id)
+        const item = await Item.findById(id)
         if (!item) return res.status(404).json({ success: false, message: 'Catalog item not found' })
+        await StoreItem.deleteMany({ itemId: id })
+        await Item.findByIdAndDelete(id)
         await emitCatalogEventToStores('catalog.item.updated', { itemId: id, changedFields: ['deleted'] })
         res.json({ success: true, data: item })
     } catch (error) { res.status(400).json({ success: false, message: 'Error deleting catalog item', error }) }
