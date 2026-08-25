@@ -1,11 +1,12 @@
 import type { Request, Response } from 'express'
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import jwt from 'jsonwebtoken'
 import Store from '../models/store.js'
 import StoreTable from '../models/store-table.js'
 import TableSession from '../models/table-session.js'
 import { getPublicMenu } from '../services/publicMenu.js'
 import GuestCart from '../models/guest-cart.js'
+import PublicOrderRateLimit from '../models/public-order-rate-limit.js'
 import Order from '../models/order.js'
 import { calculateTotal } from '../utils/orderCalculations.js'
 import { allocateOrderSequence, getCurrentOrderPeriodId } from '../services/orderNumber.js'
@@ -15,6 +16,8 @@ import { emitStoreEvent } from '../realtime.js'
 const CART_TTL_MS = 2 * 60 * 60 * 1000
 const QR_ORDER_WINDOW_MS = 60 * 1000
 const MAX_QR_ORDERS_PER_WINDOW = 8
+const ONLINE_PHONE_WINDOW_MS = 30 * 60 * 1000
+const MAX_ONLINE_ORDERS_PER_PHONE_WINDOW = 3
 const activeTableForToken = (token: string) => StoreTable.findOne({ qrToken: token, active: true }).lean()
 const activeSessionForTable = (storeId: any, tableId: any) => TableSession.findOne({ storeId, tableId, status: 'active', expiresAt: { $gt: new Date() } }).lean()
 const activeSessionForId = (storeId: any, sessionId: any) => TableSession.findOne({ _id: sessionId, storeId, status: 'active', expiresAt: { $gt: new Date() } }).lean()
@@ -50,6 +53,24 @@ const reserveQrOrderSlot = async (storeId: any, sessionId: any) => {
     ).lean())
 }
 const mainOnlineStore = () => Store.findOne({ isMain: true, active: true }).select({ name: 1 }).lean()
+
+const normalizePhone = (phone: unknown) => typeof phone === 'string' ? phone.trim().replace(/[\s().-]/g, '') : ''
+const reserveOnlinePhoneOrderSlot = async (storeId: any, phone: string) => {
+    const now = new Date()
+    const windowStartedAt = new Date(Math.floor(now.getTime() / ONLINE_PHONE_WINDOW_MS) * ONLINE_PHONE_WINDOW_MS)
+    const phoneHash = createHash('sha256').update(phone).digest('hex')
+    try {
+        const limit = await PublicOrderRateLimit.findOneAndUpdate(
+            { storeId, phoneHash, windowStartedAt, count: { $lt: MAX_ONLINE_ORDERS_PER_PHONE_WINDOW } },
+            { $inc: { count: 1 }, $setOnInsert: { expiresAt: new Date(windowStartedAt.getTime() + ONLINE_PHONE_WINDOW_MS) } },
+            { upsert: true, returnDocument: 'after', includeResultMetadata: false },
+        ).lean()
+        return Boolean(limit)
+    } catch (error: any) {
+        if (error?.code === 11000) return false
+        throw error
+    }
+}
 
 const publicRealtimeTokenForStore = (storeId: string) => {
     const realtimeSecret = process.env.PUBLIC_ORDER_REALTIME_PRIVATE_KEY
@@ -175,10 +196,14 @@ export const confirmGuestCart = async (req: Request, res: Response) => {
         const source = cart.source || 'qr'
         const customer = source === 'online' ? {
             name: typeof req.body?.customer?.name === 'string' ? req.body.customer.name.trim().slice(0, 120) : undefined,
-            phone: typeof req.body?.customer?.phone === 'string' ? req.body.customer.phone.trim().slice(0, 40) : undefined,
+            phone: normalizePhone(req.body?.customer?.phone).slice(0, 40) || undefined,
             address: typeof req.body?.customer?.address === 'string' ? req.body.customer.address.trim().slice(0, 300) : undefined,
         } : null
-        if (source === 'online' && !customer?.phone) throw new Error('PHONE_REQUIRED')
+        if (source === 'online') {
+            const phone = customer?.phone
+            if (!phone) throw new Error('PHONE_REQUIRED')
+            if (!(await reserveOnlinePhoneOrderSlot(cart.storeId, phone))) throw new Error('ONLINE_ORDER_RATE_LIMITED')
+        }
         const order = await new Order({ storeId: cart.storeId, number: sequence, sequence, periodId, items, totalPrice: calculateTotal(items, null), status: 'pending', type: cart.type || 'dine_in', table: cart.table || '', tableSessionId: cart.tableSessionId, paymentMethod: 'cash', customer, source }).save()
         await GuestCart.updateOne({ _id: cart._id }, { $set: { status: 'confirmed', orderId: order._id, expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) } })
         try { await createKitchenPrintJobs(order) } catch (error) { console.error('Failed to queue QR kitchen print jobs:', error) }
@@ -187,6 +212,6 @@ export const confirmGuestCart = async (req: Request, res: Response) => {
     } catch (error: any) {
         await GuestCart.updateOne({ _id: cart._id, status: 'confirming' }, { $set: { status: 'draft' } })
         const code = error?.message || 'ORDER_CONFIRM_FAILED'
-        res.status(code === 'TURNSTILE_NOT_CONFIGURED' ? 500 : 400).json({ success: false, code, message: 'Unable to confirm order' })
+        res.status(code === 'TURNSTILE_NOT_CONFIGURED' ? 500 : code === 'ONLINE_ORDER_RATE_LIMITED' ? 429 : 400).json({ success: false, code, message: 'Unable to confirm order' })
     }
 }
