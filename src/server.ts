@@ -36,6 +36,7 @@ import printAgent from './routers/print-agent.js'
 import printAgentAdmin from './routers/print-agent-admin.js'
 import publicOrder from './routers/public-order.js'
 import storeTable from './routers/store-table.js'
+import posDevice from './routers/pos-device.js'
 dotenv.config()
 
 
@@ -63,6 +64,7 @@ const app: Application = express()
     app.use(express.json())
     app.use('/api/refresh-token', refreshTokenRoutes)
     app.use('/api/auth', auth)
+    app.use('/api/pos-devices', posDevice)
     app.use('/api/public', publicOrder)
     app.use('/api/items', item)
     app.use('/api/catalog-items', catalogItem)
