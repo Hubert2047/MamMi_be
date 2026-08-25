@@ -50,6 +50,7 @@ export interface IOrder extends Document {
     paymentMethod: string
     customer: Customer | null
     table?: string
+    tableSessionId?: mongoose.Types.ObjectId
     source: 'pos' | 'qr' | 'online' | 'uber' | 'foodpanda'
     externalOrderId?: string
     version: number
@@ -135,6 +136,7 @@ const OrderSchema = new Schema<IOrder>(
             default: null,
         },
         table: { type: String, trim: true },
+        tableSessionId: { type: Schema.Types.ObjectId, ref: 'TableSession' },
         source: { type: String, enum: ['pos', 'qr', 'online', 'uber', 'foodpanda'], default: 'pos', required: true },
         externalOrderId: String,
         version: { type: Number, default: 1, required: true },

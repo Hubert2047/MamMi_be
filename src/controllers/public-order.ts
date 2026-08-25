@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto'
 import jwt from 'jsonwebtoken'
 import Store from '../models/store.js'
 import StoreTable from '../models/store-table.js'
+import TableSession from '../models/table-session.js'
 import { getPublicMenu } from '../services/publicMenu.js'
 import GuestCart from '../models/guest-cart.js'
 import Order from '../models/order.js'
@@ -13,6 +14,23 @@ import { emitStoreEvent } from '../realtime.js'
 
 const CART_TTL_MS = 2 * 60 * 60 * 1000
 const activeTableForToken = (token: string) => StoreTable.findOne({ qrToken: token, active: true }).lean()
+const activeSessionForTable = (storeId: any, tableId: any) => TableSession.findOne({ storeId, tableId, status: 'active', expiresAt: { $gt: new Date() } }).lean()
+const activeSessionForId = (storeId: any, sessionId: any) => TableSession.findOne({ _id: sessionId, storeId, status: 'active', expiresAt: { $gt: new Date() } }).lean()
+
+const getQrContext = async (token: string) => {
+    const table = await activeTableForToken(token)
+    if (!table) return { table: null, session: null, code: 'QR_NOT_FOUND' as const }
+    const session = await activeSessionForTable(table.storeId, table._id)
+    if (session) return { table, session, code: null }
+    const expired = await TableSession.findOneAndUpdate({ storeId: table.storeId, tableId: table._id, status: 'active', expiresAt: { $lte: new Date() } }, { $set: { status: 'expired' } }, { new: true }).lean()
+    return { table, session: null, code: expired ? 'SESSION_EXPIRED' as const : 'SESSION_NOT_ACTIVE' as const }
+}
+
+const requireActiveCartSession = async (cart: { source?: string; storeId: unknown; tableSessionId?: unknown }) => {
+    if ((cart.source || 'qr') !== 'qr') return true
+    if (!cart.tableSessionId) return false
+    return Boolean(await activeSessionForId(cart.storeId, cart.tableSessionId))
+}
 const mainOnlineStore = () => Store.findOne({ isMain: true, active: true }).select({ name: 1 }).lean()
 
 const publicRealtimeTokenForStore = (storeId: string) => {
@@ -37,8 +55,9 @@ const verifyTurnstile = async (token: unknown) => {
 
 export const getQrMenu = async (req: Request, res: Response) => {
     try {
-        const table = await activeTableForToken(String(req.params.token))
-        if (!table) return res.status(404).json({ success: false, code: 'QR_NOT_FOUND', message: 'QR code is not active' })
+        const { table, session, code } = await getQrContext(String(req.params.token))
+        if (!table) return res.status(404).json({ success: false, code, message: 'QR code is not active' })
+        if (!session) return res.status(409).json({ success: false, code, message: 'Table ordering session is not active' })
         const store = await Store.findOne({ _id: table.storeId, active: true }).select({ name: 1 }).lean()
         if (!store) return res.status(404).json({ success: false, code: 'STORE_NOT_AVAILABLE', message: 'Store is not available' })
         const items = await getPublicMenu(String(table.storeId))
@@ -52,9 +71,10 @@ export const getQrMenu = async (req: Request, res: Response) => {
 
 export const createGuestCart = async (req: Request, res: Response) => {
     try {
-        const table = await activeTableForToken(String(req.params.token))
-        if (!table) return res.status(404).json({ success: false, code: 'QR_NOT_FOUND', message: 'QR code is not active' })
-        const cart = await GuestCart.create({ storeId: table.storeId, source: 'qr', type: 'dine_in', table: table.code, lines: [], expiresAt: new Date(Date.now() + CART_TTL_MS) })
+        const { table, session, code } = await getQrContext(String(req.params.token))
+        if (!table) return res.status(404).json({ success: false, code, message: 'QR code is not active' })
+        if (!session) return res.status(409).json({ success: false, code, message: 'Table ordering session is not active' })
+        const cart = await GuestCart.create({ storeId: table.storeId, source: 'qr', type: 'dine_in', table: table.code, tableSessionId: session._id, lines: [], expiresAt: new Date(Date.now() + CART_TTL_MS) })
         res.status(201).json({ success: true, data: { cartToken: cart.cartToken, table: cart.table, lines: cart.lines } })
     } catch { res.status(500).json({ success: false, message: 'Unable to create cart' }) }
 }
@@ -86,12 +106,16 @@ export const createOnlineGuestCart = async (req: Request, res: Response) => {
 export const getGuestCart = async (req: Request, res: Response) => {
     const cart = await GuestCart.findOne({ cartToken: String(req.params.cartToken) }).lean()
     if (!cart) return res.status(404).json({ success: false, code: 'CART_NOT_FOUND', message: 'Cart not found' })
+    if (!(await requireActiveCartSession(cart))) return res.status(409).json({ success: false, code: 'SESSION_EXPIRED', message: 'Table ordering session is not active' })
     res.json({ success: true, data: { cartToken: cart.cartToken, table: cart.table, lines: cart.lines, status: cart.status } })
 }
 
 export const updateGuestCart = async (req: Request, res: Response) => {
     const lines = Array.isArray(req.body.lines) ? req.body.lines : null
     if (!lines || lines.some((line: any) => !line.itemId || !Number.isInteger(line.quantity) || line.quantity < 1 || line.quantity > 99 || !Array.isArray(line.noteOptions) || !Array.isArray(line.addonIds))) return res.status(400).json({ success: false, message: 'Invalid cart lines' })
+    const existing = await GuestCart.findOne({ cartToken: String(req.params.cartToken), status: 'draft' }).select({ source: 1, storeId: 1, tableSessionId: 1 }).lean()
+    if (!existing) return res.status(409).json({ success: false, code: 'CART_LOCKED', message: 'Cart is unavailable' })
+    if (!(await requireActiveCartSession(existing))) return res.status(409).json({ success: false, code: 'SESSION_EXPIRED', message: 'Table ordering session is not active' })
     const update: any = { lines, expiresAt: new Date(Date.now() + CART_TTL_MS) }
     if (req.body.type !== undefined) {
         if (req.body.type !== 'dine_in' && req.body.type !== 'takeaway') return res.status(400).json({ success: false, code: 'INVALID_ORDER_TYPE', message: 'Order type must be dine-in or takeaway' })
@@ -103,8 +127,9 @@ export const updateGuestCart = async (req: Request, res: Response) => {
 }
 
 export const confirmGuestCart = async (req: Request, res: Response) => {
-    const draft = await GuestCart.findOne({ cartToken: String(req.params.cartToken), status: 'draft' }).select({ source: 1 }).lean()
+    const draft = await GuestCart.findOne({ cartToken: String(req.params.cartToken), status: 'draft' }).select({ source: 1, storeId: 1, tableSessionId: 1 }).lean()
     if (!draft) return res.status(409).json({ success: false, code: 'CART_LOCKED', message: 'Cart was already confirmed or is unavailable' })
+    if (!(await requireActiveCartSession(draft))) return res.status(409).json({ success: false, code: 'SESSION_EXPIRED', message: 'Table ordering session is not active' })
     if ((draft.source || 'qr') === 'online') {
         try {
             if (!(await verifyTurnstile(req.body?.turnstileToken))) return res.status(400).json({ success: false, code: 'TURNSTILE_FAILED', message: 'Human verification failed' })
@@ -135,7 +160,7 @@ export const confirmGuestCart = async (req: Request, res: Response) => {
             address: typeof req.body?.customer?.address === 'string' ? req.body.customer.address.trim().slice(0, 300) : undefined,
         } : null
         if (source === 'online' && !customer?.phone) throw new Error('PHONE_REQUIRED')
-        const order = await new Order({ storeId: cart.storeId, number: sequence, sequence, periodId, items, totalPrice: calculateTotal(items, null), status: 'pending', type: cart.type || 'dine_in', table: cart.table || '', paymentMethod: 'cash', customer, source }).save()
+        const order = await new Order({ storeId: cart.storeId, number: sequence, sequence, periodId, items, totalPrice: calculateTotal(items, null), status: 'pending', type: cart.type || 'dine_in', table: cart.table || '', tableSessionId: cart.tableSessionId, paymentMethod: 'cash', customer, source }).save()
         await GuestCart.updateOne({ _id: cart._id }, { $set: { status: 'confirmed', orderId: order._id, expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) } })
         try { await createKitchenPrintJobs(order) } catch (error) { console.error('Failed to queue QR kitchen print jobs:', error) }
         emitStoreEvent(String(cart.storeId), 'order.created', { orderId: String(order._id), source })
