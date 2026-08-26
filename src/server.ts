@@ -11,7 +11,7 @@ import order from './routers/order.js'
 import category from './routers/category.js'
 import cors from 'cors'
 import expense from './routers/expense.js'
-import discount from './routers/discount.js'
+import promotion from './routers/promotion.js'
 import addon from './routers/addon.js'
 import storeAddon from './routers/store-addon.js'
 import revenue from './routers/revenue.js'
@@ -32,6 +32,7 @@ import store from './routers/store.js'
 import user from './routers/user.js'
 import { ensureStoreAddons, ensureStoreCatalog, ensureStoreScopedFinancialData, migrateStoreAddonAvailability, migrateStoreItemAvailability } from './services/storeCatalogMigration.js'
 import { initializeRealtime } from './realtime.js'
+import { expireEndedPromotions } from './services/promotionPricing.js'
 import printAgent from './routers/print-agent.js'
 import printAgentAdmin from './routers/print-agent-admin.js'
 import publicOrder from './routers/public-order.js'
@@ -47,6 +48,9 @@ const app: Application = express()
     await ensureDefaultUsers()
     await migrateStoreItemAvailability()
     await migrateStoreAddonAvailability()
+    await expireEndedPromotions()
+    const promotionExpiryTimer = setInterval(() => { void expireEndedPromotions().catch((error) => console.error('Failed to expire promotions:', error)) }, 60_000)
+    promotionExpiryTimer.unref()
     const defaultStore = await Store.findOne({ code: 'main' }).select({ _id: 1 }).lean()
     if (defaultStore) {
         await ensureStoreCatalog(defaultStore._id.toString())
@@ -86,7 +90,7 @@ const app: Application = express()
     app.use('/api/units', unit)
     app.use('/api/inventory', inventory)
     app.use('/api/inventory', stocktake)
-    app.use('/api/discounts', discount)
+    app.use('/api/promotions', promotion)
     app.use('/api/addons', addon)
     app.use('/api/store-addons', storeAddon)
     app.use('/api/other-revenues', revenue)

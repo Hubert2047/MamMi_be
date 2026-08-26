@@ -24,10 +24,13 @@ interface OrderItem {
     printNoteOptions?: string[]
 }
 
-export interface OrderDiscount {
+export interface AppliedPromotion {
+    promotionId: string
+    promotionVersion: number
     name: string
-    amount: number
-    type: 'percent' | 'value'
+    mode: 'automatic' | 'manual'
+    discountAmount: number
+    allocations: { itemId: string; productDiscountAmount: number; addonDiscounts: { addonId: string; discountAmount: number }[] }[]
 }
 interface Customer {
     name?: string
@@ -46,7 +49,7 @@ export interface IOrder extends Document {
     status: 'pending' | 'paid' | 'cancelled'
     paidAt?: Date
     type: 'dine_in' | 'takeaway' | 'uber' | 'foodpanda'
-    discount?: OrderDiscount
+    appliedPromotions: AppliedPromotion[]
     paymentMethod: string
     customer: Customer | null
     table?: string
@@ -73,14 +76,14 @@ const OrderItemAddonSchema = new Schema<OrderItemAddon>(
     },
     { _id: false },
 )
-const OrderDiscountSchema = new Schema<OrderDiscount>(
+const AppliedPromotionSchema = new Schema<AppliedPromotion>(
     {
         name: { type: String },
-        type: {
-            type: String,
-            enum: ['percent', 'value'],
-        },
-        amount: { type: Number },
+        promotionId: { type: String, required: true },
+        promotionVersion: { type: Number, required: true },
+        mode: { type: String, enum: ['automatic', 'manual'], required: true },
+        discountAmount: { type: Number, required: true },
+        allocations: [{ itemId: String, productDiscountAmount: Number, addonDiscounts: [{ addonId: String, discountAmount: Number }] }],
     },
     { _id: false },
 )
@@ -122,10 +125,7 @@ const OrderSchema = new Schema<IOrder>(
             enum: ['dine_in', 'takeaway', 'uber', 'foodpanda'],
             default: 'dine_in',
         },
-        discount: {
-            type: OrderDiscountSchema,
-            default: null,
-        },
+        appliedPromotions: { type: [AppliedPromotionSchema], default: [] },
         paymentMethod: {
             type: String,
             enum: PAYMENT_METHODS,

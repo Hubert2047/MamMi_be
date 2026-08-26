@@ -20,7 +20,7 @@ const channelForEvent: Record<string, RealtimeChannel> = {
     'catalog.store-item.availability.updated': 'catalog',
     'catalog.store-addon.updated': 'catalog',
     'catalog.store-addon.availability.updated': 'catalog',
-    'catalog.discount.updated': 'catalog',
+    'catalog.promotion.updated': 'catalog',
     'catalog.changed': 'catalog',
     'inventory.item.updated': 'catalog',
     'inventory.unit.updated': 'catalog',

@@ -8,7 +8,7 @@ import { getPublicMenu } from '../services/publicMenu.js'
 import GuestCart from '../models/guest-cart.js'
 import PublicOrderRateLimit from '../models/public-order-rate-limit.js'
 import Order from '../models/order.js'
-import { calculateTotal } from '../utils/orderCalculations.js'
+import { applyPublicMenuPromotionDisplays, calculateStorePromotionPricing, getPublicCatalogPromotions } from '../services/promotionPricing.js'
 import { allocateOrderSequence, getCurrentOrderPeriodId } from '../services/orderNumber.js'
 import { createKitchenPrintJobs } from '../services/printJobs.js'
 import { emitStoreEvent } from '../realtime.js'
@@ -99,9 +99,9 @@ export const getQrMenu = async (req: Request, res: Response) => {
         if (!session) return res.status(409).json({ success: false, code, message: 'Table ordering session is not active' })
         const store = await Store.findOne({ _id: table.storeId, active: true }).select({ name: 1 }).lean()
         if (!store) return res.status(404).json({ success: false, code: 'STORE_NOT_AVAILABLE', message: 'Store is not available' })
-        const items = await getPublicMenu(String(table.storeId))
+        const [items, promotions] = await Promise.all([getPublicMenu(String(table.storeId)), getPublicCatalogPromotions(String(table.storeId))])
         const realtimeToken = publicRealtimeTokenForStore(String(table.storeId))
-        res.json({ success: true, data: { store: { name: store.name }, table: { code: table.code, name: table.name }, items, realtimeToken } })
+        res.json({ success: true, data: { store: { name: store.name }, table: { code: table.code, name: table.name }, items: applyPublicMenuPromotionDisplays(items, promotions), realtimeToken } })
     } catch (error) {
         console.error('Error fetching QR menu:', error)
         res.status(500).json({ success: false, message: 'Unable to fetch menu' })
@@ -122,9 +122,9 @@ export const getOnlineMenu = async (_req: Request, res: Response) => {
     try {
         const store = await mainOnlineStore()
         if (!store) return res.status(404).json({ success: false, code: 'STORE_NOT_AVAILABLE', message: 'Main store is not available' })
-        const items = await getPublicMenu(String(store._id))
+        const [items, promotions] = await Promise.all([getPublicMenu(String(store._id)), getPublicCatalogPromotions(String(store._id))])
         const realtimeToken = publicRealtimeTokenForStore(String(store._id))
-        res.json({ success: true, data: { store: { name: store.name }, items, realtimeToken } })
+        res.json({ success: true, data: { store: { name: store.name }, items: applyPublicMenuPromotionDisplays(items, promotions), realtimeToken } })
     } catch (error) {
         console.error('Error fetching online menu:', error)
         res.status(500).json({ success: false, message: 'Unable to fetch online menu' })
@@ -163,6 +163,31 @@ export const updateGuestCart = async (req: Request, res: Response) => {
     const cart = await GuestCart.findOneAndUpdate({ cartToken: String(req.params.cartToken), status: 'draft' }, { $set: update }, { returnDocument: 'after', includeResultMetadata: false })
     if (!cart) return res.status(409).json({ success: false, code: 'CART_LOCKED', message: 'Cart is unavailable' })
     res.json({ success: true, data: { cartToken: cart.cartToken, table: cart.table, type: cart.type, lines: cart.lines } })
+}
+
+export const previewGuestCart = async (req: Request, res: Response) => {
+    const cart = await GuestCart.findOne({ cartToken: String(req.params.cartToken), status: 'draft' }).lean()
+    if (!cart) return res.status(409).json({ success: false, code: 'CART_LOCKED', message: 'Cart is unavailable' })
+    if (!(await requireActiveCartSession(cart))) return res.status(409).json({ success: false, code: 'SESSION_EXPIRED', message: 'Table ordering session is not active' })
+    const lines = Array.isArray(req.body?.lines) ? req.body.lines : cart.lines
+    if (!Array.isArray(lines) || lines.some((line: any) => !line.itemId || !Number.isInteger(line.quantity) || line.quantity < 1 || line.quantity > 99 || !Array.isArray(line.noteOptions) || !Array.isArray(line.addonIds))) return res.status(400).json({ success: false, message: 'Invalid cart lines' })
+    try {
+        const menu = await getPublicMenu(String(cart.storeId))
+        const byId = new Map(menu.map((item: any) => [item.id, item]))
+        const items = lines.map((line: any) => {
+            const item: any = byId.get(line.itemId)
+            if (!item) throw new Error('ITEM_NOT_AVAILABLE')
+            if (line.variant && !item.variants.some((option: any) => option.id === line.variant)) throw new Error('INVALID_OPTION')
+            if (line.noteOptions.some((id: string) => !item.noteOptions.some((option: any) => option.id === id))) throw new Error('INVALID_OPTION')
+            const addons = line.addonIds.map((id: string) => { const addon = item.addons.find((candidate: any) => candidate.id === id); if (!addon) throw new Error('ADDON_NOT_AVAILABLE'); return { id, name: addon.names.vi || addon.names.en || '', priceExtra: addon.priceExtra, amount: 1 } })
+            return { id: line.itemId, itemId: randomBytes(12).toString('hex'), name: item.names.vi || item.names.en || '', quantity: line.quantity, basePrice: item.price, variant: line.variant || '', addons, noteOptions: line.noteOptions, note: String(line.note || '').slice(0, 300) }
+        })
+        const pricing = await calculateStorePromotionPricing(String(cart.storeId), items)
+        const cartHash = createHash('sha256').update(JSON.stringify({ storeId: String(cart.storeId), lines })).digest('base64url')
+        res.json({ success: true, data: { ...pricing, cartHash, expiresAt: new Date(Date.now() + 60_000).toISOString() } })
+    } catch (error: any) {
+        res.status(400).json({ success: false, code: error?.message || 'CART_PREVIEW_FAILED', message: 'Unable to preview cart' })
+    }
 }
 
 export const confirmGuestCart = async (req: Request, res: Response) => {
@@ -204,11 +229,12 @@ export const confirmGuestCart = async (req: Request, res: Response) => {
             if (!phone) throw new Error('PHONE_REQUIRED')
             if (!(await reserveOnlinePhoneOrderSlot(cart.storeId, phone))) throw new Error('ONLINE_ORDER_RATE_LIMITED')
         }
-        const order = await new Order({ storeId: cart.storeId, number: sequence, sequence, periodId, items, totalPrice: calculateTotal(items, null), status: 'pending', type: cart.type || 'dine_in', table: cart.table || '', tableSessionId: cart.tableSessionId, paymentMethod: 'cash', customer, source }).save()
+        const pricing = await calculateStorePromotionPricing(String(cart.storeId), items)
+        const order = await new Order({ storeId: cart.storeId, number: sequence, sequence, periodId, items, totalPrice: pricing.total, appliedPromotions: pricing.appliedPromotions, status: 'pending', type: cart.type || 'dine_in', table: cart.table || '', tableSessionId: cart.tableSessionId, paymentMethod: 'cash', customer, source }).save()
         await GuestCart.updateOne({ _id: cart._id }, { $set: { status: 'confirmed', orderId: order._id, expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) } })
         try { await createKitchenPrintJobs(order) } catch (error) { console.error('Failed to queue QR kitchen print jobs:', error) }
         emitStoreEvent(String(cart.storeId), 'order.created', { orderId: String(order._id), source })
-        res.status(201).json({ success: true, data: { number: sequence, orderId: String(order._id), table: cart.table, type: cart.type, source } })
+        res.status(201).json({ success: true, data: { number: sequence, orderId: String(order._id), table: cart.table, type: cart.type, source, total: pricing.total } })
     } catch (error: any) {
         await GuestCart.updateOne({ _id: cart._id, status: 'confirming' }, { $set: { status: 'draft' } })
         const code = error?.message || 'ORDER_CONFIRM_FAILED'

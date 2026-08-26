@@ -6,6 +6,9 @@ import Item from '../models/item.js'
 import mongoose from 'mongoose'
 import { getFromDayUntilNow, getFullDay } from '../utils/index.js'
 import { calculateTotal } from '../utils/orderCalculations.js'
+import Promotion from '../models/promotion.js'
+import StorePromotion from '../models/store-promotion.js'
+import { calculatePromotionPricing, isPromotionAvailableAt, matchesExpectedPromotionPricing, type PricePromotion, type PromotionOrderItem } from '../utils/promotionCalculations.js'
 import { getPaidAt } from '../utils/orderPaymentCalculations.js'
 import { buildPaidOrderFilter } from '../utils/paidOrderFilters.js'
 import { assertFinancialPeriodOpen, FinancialPeriodClosedError } from '../services/financialPeriodLock.js'
@@ -15,6 +18,19 @@ import DailyClosing from '../models/daily-closing.js'
 import Store from '../models/store.js'
 import { allocateOrderSequence, getCurrentOrderPeriodId, getNextOrderSequence } from '../services/orderNumber.js'
 import { createKitchenPrintJobs } from '../services/printJobs.js'
+import { expireEndedPromotions } from '../services/promotionPricing.js'
+
+const calculatePromotionsForOrder = async (storeId: string, items: PromotionOrderItem[], selectedPromotionIds: string[] = []) => {
+    const now = new Date()
+    await expireEndedPromotions(now)
+    const configs = await StorePromotion.find({ storeId, enabled: true }).populate('promotionId').lean()
+    const promotions: PricePromotion[] = configs.flatMap((config: any) => {
+        const promotion = config.promotionId as any
+        if (!promotion || !isPromotionAvailableAt(promotion, now)) return []
+        return [{ id: String(promotion._id), name: promotion.names.vi || promotion.names.en || promotion.names['zh-TW'], version: promotion.version, mode: promotion.mode, minSubtotal: promotion.minSubtotal, priority: promotion.priority, combinable: promotion.combinable, exclusiveGroup: promotion.exclusiveGroup, rules: promotion.rules.map((rule: any) => ({ target: rule.target, productIds: rule.productIds.map(String), addonIds: rule.addonIds.map(String), reward: rule.reward })) }]
+    })
+    return calculatePromotionPricing(items, promotions, selectedPromotionIds)
+}
 
 export const getNextOrderNumber = async (req: Request, res: Response) => {
     try {
@@ -141,7 +157,11 @@ export const createOrder = async (req: Request, res: Response) => {
             }
         })
 
-        const totalPrice = calculateTotal(normalizedItems, order.discount)
+        const selectedPromotionIds = Array.isArray(order.selectedPromotionIds) ? order.selectedPromotionIds.map(String) : []
+        if (selectedPromotionIds.length > 1) return res.status(400).json({ success: false, code: 'MANUAL_PROMOTION_LIMIT', message: 'Only one manual promotion may be selected' })
+        const pricing = await calculatePromotionsForOrder(storeId, normalizedItems, selectedPromotionIds)
+        if (!matchesExpectedPromotionPricing(order.expectedPricing, pricing)) return res.status(409).json({ success: false, code: 'PROMOTION_PRICE_CHANGED', message: 'Promotion pricing changed', data: pricing })
+        const totalPrice = pricing.total
         const periodId = await getCurrentOrderPeriodId(storeId)
         const sequence = await allocateOrderSequence(storeId, periodId)
 
@@ -155,7 +175,7 @@ export const createOrder = async (req: Request, res: Response) => {
             status: order.status,
             type: order.type,
             paymentMethod: order.paymentMethod,
-            discount: order.discount,
+            appliedPromotions: pricing.appliedPromotions,
             customer: order.customer,
             ...(order.type === 'dine_in' ? { table: String(order.table).trim() } : {}),
             source: order.source || 'pos',
@@ -367,7 +387,7 @@ export const updateOrderPayment = async (req: Request, res: Response) => {
 export const updatePendingOrder = async (req: Request, res: Response) => {
     try {
         const id = String(req.params.id)
-        const { items, type, table, discount, paymentMethod, version } = req.body
+        const { items, type, table, selectedPromotionIds, expectedPricing, paymentMethod, version } = req.body
         const storeId = (req as AuthRequest).user.storeId
 
         if (!Array.isArray(items) || items.length === 0) {
@@ -393,6 +413,10 @@ export const updatePendingOrder = async (req: Request, res: Response) => {
             if (availableAddons !== validAddonIds.length) return res.status(400).json({ success: false, code: 'ADDON_NOT_AVAILABLE', message: 'One or more selected add-ons are no longer available' })
         }
 
+        const selectedIds = Array.isArray(selectedPromotionIds) ? selectedPromotionIds.map(String) : []
+        if (selectedIds.length > 1) return res.status(400).json({ success: false, code: 'MANUAL_PROMOTION_LIMIT', message: 'Only one manual promotion may be selected' })
+        const pricing = await calculatePromotionsForOrder(storeId, items, selectedIds)
+        if (!matchesExpectedPromotionPricing(expectedPricing, pricing)) return res.status(409).json({ success: false, code: 'PROMOTION_PRICE_CHANGED', message: 'Promotion pricing changed', data: pricing })
         const updated = await Order.findOneAndUpdate(
             { _id: id, storeId, status: 'pending', version },
             {
@@ -400,9 +424,9 @@ export const updatePendingOrder = async (req: Request, res: Response) => {
                     items,
                     type,
                     table: type === 'dine_in' ? String(table).trim() : '',
-                    discount: discount || null,
+                    appliedPromotions: pricing.appliedPromotions,
                     paymentMethod,
-                    totalPrice: calculateTotal(items, discount),
+                    totalPrice: pricing.total,
                 },
                 $inc: { version: 1 },
             },
@@ -410,7 +434,7 @@ export const updatePendingOrder = async (req: Request, res: Response) => {
         )
         if (!updated) return res.status(409).json({ success: false, code: 'ORDER_VERSION_CONFLICT', message: 'Order was changed by another device or is no longer pending' })
 
-        emitStoreEvent(storeId, 'order.updated', { orderId: String(updated._id), changedFields: ['items', 'type', 'table', 'discount', 'paymentMethod', 'totalPrice'] })
+        emitStoreEvent(storeId, 'order.updated', { orderId: String(updated._id), changedFields: ['items', 'type', 'table', 'appliedPromotions', 'paymentMethod', 'totalPrice'] })
         res.json({ success: true, data: updated })
     } catch (error) {
         console.error('Error updating pending order:', error)
