@@ -9,6 +9,7 @@
     "migrate:order-index": "tsx src/scripts/migrateOrderExternalIdIndex.ts",
     "migrate:order-sequence": "tsx src/scripts/migrateOrderSequenceIndex.ts",
     "migrate:inventory-current-quantity": "tsx src/scripts/migrateInventoryCurrentQuantity.ts",
+    "migrate:combo-support": "tsx src/scripts/migrateComboSupport.ts",
     "test": "vitest run",
     "test:watch": "vitest"
   },

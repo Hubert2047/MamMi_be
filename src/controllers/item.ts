@@ -33,9 +33,11 @@ const normalizeOptions = (options: unknown, prefix: string): LocalizedOption[] =
         },
     }
 })
+const normalizeComponents = (components: unknown) => (Array.isArray(components) ? components : []).map((component: any) => ({ itemId: component.itemId, quantity: Math.max(1, Number(component.quantity) || 1) }))
 
 const toCatalogItem = (item: any, language: string) => ({
     ...item,
+    type: item.type || 'product',
     variants: normalizeOptions(item.variants, 'variant'),
     noteOptions: normalizeOptions(item.noteOptions, 'note'),
     name: item.names?.[language] || item.names?.vi || Object.values(item.names || {})[0] || '',
@@ -74,7 +76,7 @@ export const createCatalogItem = async (req: Request, res: Response) => {
         if (!names) return res.status(400).json({ success: false, message: 'At least one product name is required' })
         const description = req.body.description === undefined ? undefined : normalizeNames(req.body.description)
         const { price: _price, active: _active, ...data } = req.body
-        const item = await Item.create({ ...data, names, ...(description ? { description } : {}), variants: normalizeOptions(req.body.variants, 'variant'), noteOptions: normalizeOptions(req.body.noteOptions, 'note') })
+        const item = await Item.create({ ...data, type: req.body.type === 'combo' ? 'combo' : 'product', components: normalizeComponents(req.body.components), names, ...(description ? { description } : {}), variants: normalizeOptions(req.body.variants, 'variant'), noteOptions: normalizeOptions(req.body.noteOptions, 'note') })
         await emitCatalogEventToStores('catalog.item.updated', { itemId: String(item._id), changedFields: ['created'] })
         res.status(201).json({ success: true, data: item })
     } catch (error) { res.status(400).json({ success: false, message: 'Error creating catalog item', error }) }
@@ -87,7 +89,8 @@ export const updateCatalogItem = async (req: Request, res: Response) => {
         if (req.body.names !== undefined && !names) return res.status(400).json({ success: false, message: 'At least one product name is required' })
         const description = req.body.description === undefined ? undefined : normalizeNames(req.body.description)
         const { price: _price, active: _active, ...data } = req.body
-        const item = await Item.findByIdAndUpdate(id, { ...data, ...(names ? { names } : {}), ...(description ? { description } : {}), ...(req.body.variants ? { variants: normalizeOptions(req.body.variants, 'variant') } : {}), ...(req.body.noteOptions ? { noteOptions: normalizeOptions(req.body.noteOptions, 'note') } : {}) }, { returnDocument: 'after', runValidators: true })
+        const update = { ...data, ...(req.body.type ? { type: req.body.type === 'combo' ? 'combo' : 'product' } : {}), ...(req.body.components ? { components: normalizeComponents(req.body.components) } : {}), ...(names ? { names } : {}), ...(description ? { description } : {}), ...(req.body.variants ? { variants: normalizeOptions(req.body.variants, 'variant') } : {}), ...(req.body.noteOptions ? { noteOptions: normalizeOptions(req.body.noteOptions, 'note') } : {}) }
+        const item = await Item.findByIdAndUpdate(id, update, { returnDocument: 'after', runValidators: true })
         if (!item) return res.status(404).json({ success: false, message: 'Catalog item not found' })
         await emitCatalogEventToStores('catalog.item.updated', { itemId: id, changedFields: Object.keys(req.body) })
         res.json({ success: true, data: item })

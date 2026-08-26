@@ -1,12 +1,14 @@
 import mongoose, { Schema, Document } from 'mongoose'
 
 export interface IItem extends Document {
+    type: 'product' | 'combo'
     names: Map<string, string>
     description: Map<string, string>
     variants: Array<LocalizedOption | string>
     categoryId: mongoose.Types.ObjectId
     addons: mongoose.Types.ObjectId[]
     noteOptions: Array<LocalizedOption | string>
+    components: Array<{ itemId: mongoose.Types.ObjectId; quantity: number }>
 }
 
 export interface LocalizedOption {
@@ -16,6 +18,7 @@ export interface LocalizedOption {
 
 const ItemSchema = new Schema<IItem>(
     {
+        type: { type: String, enum: ['product', 'combo'], default: 'product' },
         names: { type: Map, of: String, required: true },
         description: { type: Map, of: String, default: {} },
         // Mixed keeps legacy string arrays readable while the controller normalizes new data.
@@ -27,6 +30,7 @@ const ItemSchema = new Schema<IItem>(
             required: true,
         },
         noteOptions: { type: [Schema.Types.Mixed], default: [] },
+        components: [{ itemId: { type: Schema.Types.ObjectId, ref: 'Item', required: true }, quantity: { type: Number, min: 1, default: 1 } }],
     },
     { timestamps: true },
 )
