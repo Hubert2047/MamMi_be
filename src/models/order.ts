@@ -30,6 +30,7 @@ export interface AppliedPromotion {
     promotionVersion: number
     name: string
     mode: 'automatic' | 'manual'
+    targets?: ('order' | 'product' | 'addon' | 'line')[]
     discountAmount: number
     allocations: { itemId: string; productDiscountAmount: number; addonDiscounts: { addonId: string; discountAmount: number }[] }[]
 }
@@ -83,6 +84,7 @@ const AppliedPromotionSchema = new Schema<AppliedPromotion>(
         promotionId: { type: String, required: true },
         promotionVersion: { type: Number, required: true },
         mode: { type: String, enum: ['automatic', 'manual'], required: true },
+        targets: [{ type: String, enum: ['order', 'product', 'addon', 'line'] }],
         discountAmount: { type: Number, required: true },
         allocations: [{ itemId: String, productDiscountAmount: Number, addonDiscounts: [{ addonId: String, discountAmount: Number }] }],
     },

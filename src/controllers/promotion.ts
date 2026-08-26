@@ -16,6 +16,7 @@ const namesOf = (value: unknown): Names | null => {
 const nameFor = (names: Names, language: string) => names[language as keyof Names] || names.vi || names.en || names['zh-TW']
 const isValidRules = (rules: unknown) => Array.isArray(rules) && rules.length > 0 && rules.filter((rule: any) => rule?.target === 'order').length <= 1 && rules.every((rule: any) => ['order', 'product', 'addon', 'line'].includes(rule?.target) && ['percent', 'value'].includes(rule?.reward?.type) && Number.isFinite(Number(rule?.reward?.amount)) && Number(rule.reward.amount) >= 0 && (rule.reward.type !== 'percent' || Number(rule.reward.amount) <= 100))
 const hasValidWindow = (startsAt: unknown, endsAt: unknown) => !startsAt || !endsAt || new Date(String(startsAt)).getTime() <= new Date(String(endsAt)).getTime()
+const isEditableStatus = (status: unknown): status is 'draft' | 'active' => status === 'draft' || status === 'active'
 const responseFor = (promotion: any, config: any, language: string) => ({
     _id: String(promotion._id), names: promotion.names, name: nameFor(promotion.names, language), mode: promotion.mode,
     minSubtotal: promotion.minSubtotal, priority: promotion.priority, combinable: promotion.combinable,
@@ -26,12 +27,12 @@ const responseFor = (promotion: any, config: any, language: string) => ({
 
 export const createPromotion = async (req: Request, res: Response) => {
     const names = namesOf(req.body.names)
-    if (!names || !isValidRules(req.body.rules) || !hasValidWindow(req.body.startsAt, req.body.endsAt)) return res.status(400).json({ success: false, message: 'Promotion name, rules, and validity window are required' })
+    if (!names || !isValidRules(req.body.rules) || !req.body.startsAt || !req.body.endsAt || !hasValidWindow(req.body.startsAt, req.body.endsAt)) return res.status(400).json({ success: false, message: 'Promotion name, rules, start time, and end time are required' })
     const storeIds = Array.isArray(req.body.storeIds) ? req.body.storeIds : []
-    const promotion = await Promotion.create({ names, mode: req.body.mode === 'automatic' ? 'automatic' : 'manual', minSubtotal: req.body.minSubtotal || undefined, priority: Number(req.body.priority) || 0, combinable: req.body.combinable === true, exclusiveGroup: req.body.exclusiveGroup || undefined, rules: req.body.rules, status: req.body.status || 'draft', startsAt: req.body.startsAt || undefined, endsAt: req.body.endsAt || undefined })
-    if (storeIds.length) await StorePromotion.insertMany(storeIds.map((storeId: string) => ({ storeId, promotionId: promotion._id, enabled: req.body.enabled !== false })))
+    const promotion = await Promotion.create({ names, mode: req.body.mode === 'automatic' ? 'automatic' : 'manual', minSubtotal: req.body.minSubtotal || undefined, priority: Number(req.body.priority) || 0, combinable: req.body.combinable === true, exclusiveGroup: req.body.exclusiveGroup || undefined, rules: req.body.rules, status: req.body.status === 'active' ? 'active' : 'draft', startsAt: req.body.startsAt || undefined, endsAt: req.body.endsAt || undefined })
+    if (storeIds.length) await StorePromotion.insertMany(storeIds.map((storeId: string) => ({ storeId, promotionId: promotion._id, enabled: req.body.enabled === true })))
     await emitCatalogEventToStores('catalog.changed', { entity: 'promotion', promotionId: String(promotion._id), changedFields: ['created'] }, storeIds)
-    res.status(201).json({ success: true, data: responseFor(promotion, { enabled: req.body.enabled !== false }, String(req.query.lang || 'vi')) })
+    res.status(201).json({ success: true, data: responseFor(promotion, { enabled: req.body.enabled === true }, String(req.query.lang || 'vi')) })
 }
 
 export const getPromotions = async (req: Request, res: Response) => {
@@ -39,7 +40,7 @@ export const getPromotions = async (req: Request, res: Response) => {
     const storeId = String(req.query.storeId || (req as AuthRequest).user.storeId || '')
     const isSuperAdmin = (req as AuthRequest).user.role === Role.SuperAdmin
     const [promotions, storeConfigs, allConfigs] = await Promise.all([
-        Promotion.find().sort({ createdAt: -1 }).lean(),
+        Promotion.find(isSuperAdmin ? {} : { status: 'active' }).sort({ createdAt: -1 }).lean(),
         StorePromotion.find({ storeId }).lean(),
         isSuperAdmin ? StorePromotion.find().lean() : Promise.resolve([]),
     ])
@@ -53,6 +54,7 @@ export const updatePromotion = async (req: Request, res: Response) => {
     const names = req.body.names === undefined ? undefined : namesOf(req.body.names)
     if (req.body.names !== undefined && !names) return res.status(400).json({ success: false, message: 'Promotion name is required' })
     if (req.body.rules !== undefined && !isValidRules(req.body.rules)) return res.status(400).json({ success: false, message: 'At least one valid rule is required' })
+    if (req.body.status !== undefined && !isEditableStatus(req.body.status)) return res.status(400).json({ success: false, message: 'Promotion status must be draft or active' })
     if (!hasValidWindow(req.body.startsAt, req.body.endsAt)) return res.status(400).json({ success: false, message: 'The end time must not precede the start time' })
     const update: Record<string, unknown> = {}
     for (const key of ['mode', 'minSubtotal', 'priority', 'combinable', 'exclusiveGroup', 'rules', 'status', 'startsAt', 'endsAt']) if (req.body[key] !== undefined) update[key] = req.body[key]

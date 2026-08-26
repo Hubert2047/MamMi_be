@@ -21,6 +21,8 @@ export type AppliedPromotion = {
     promotionVersion: number
     name: string
     mode: PromotionMode
+    /** Targets covered by this promotion, used by clients to avoid presenting order discounts as line discounts. */
+    targets?: PromotionTarget[]
     discountAmount: number
     allocations: { itemId: string; productDiscountAmount: number; addonDiscounts: { addonId: string; discountAmount: number }[] }[]
 }
@@ -130,7 +132,7 @@ export const calculatePromotionPricing = (items: PromotionOrderItem[], promotion
             })
         }
         const discountAmount = allocations.reduce((sum, allocation) => sum + allocation.productDiscountAmount + allocation.addonDiscounts.reduce((addonSum, addon) => addonSum + addon.discountAmount, 0), 0)
-        if (discountAmount) appliedPromotions.push({ promotionId: promotion.id, promotionVersion: promotion.version, name: promotion.name, mode: promotion.mode, discountAmount, allocations })
+        if (discountAmount) appliedPromotions.push({ promotionId: promotion.id, promotionVersion: promotion.version, name: promotion.name, mode: promotion.mode, targets: [...new Set(promotion.rules.map((rule) => rule.target))], discountAmount, allocations })
     }
     const total = remainingProduct.reduce((sum, amount) => sum + amount, 0) + remainingAddon.reduce((sum, addons) => sum + addons.reduce((addonSum, amount) => addonSum + amount, 0), 0)
     return { total, appliedPromotions }

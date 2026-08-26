@@ -50,7 +50,9 @@ describe('promotion calculations', () => {
             { id: 'manual', name: 'Order reward', version: 1, mode: 'manual' as const, minSubtotal: 100, priority: 1, combinable: true, rules: [{ target: 'order' as const, reward: { type: 'value' as const, amount: 50 } }] },
         ]
         expect(calculatePromotionPricing(items, promotions).total).toBe(220)
-        expect(calculatePromotionPricing(items, promotions, ['manual']).total).toBe(170)
+        const result = calculatePromotionPricing(items, promotions, ['manual'])
+        expect(result.total).toBe(170)
+        expect(result.appliedPromotions[0]?.targets).toEqual(['order'])
     })
 
     it('applies product, addon, line, then order rules on the remaining amounts and records the allocation', () => {
@@ -64,6 +66,7 @@ describe('promotion calculations', () => {
         }])
         expect(result.total).toBe(75)
         expect(result.appliedPromotions[0]?.discountAmount).toBe(45)
+        expect(result.appliedPromotions[0]?.targets).toEqual(['product', 'addon', 'line', 'order'])
         expect(result.appliedPromotions[0]?.allocations).toEqual([{ itemId: 'tea', productDiscountAmount: 40, addonDiscounts: [{ addonId: 'boba', discountAmount: 5 }] }])
     })
 
