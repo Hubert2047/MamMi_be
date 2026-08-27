@@ -20,6 +20,7 @@ const toResponseCategory = (category: any) => {
     return {
         ...category,
         names: category.names || { vi: legacyName, en: legacyName, 'zh-TW': legacyName },
+        sortOrder: Number.isInteger(category.sortOrder) && category.sortOrder >= 0 ? category.sortOrder : 0,
     }
 }
 
@@ -30,7 +31,7 @@ const duplicateCategoryError = (error: any) => {
 
 export const getCategories = async (req: Request, res: Response) => {
     try {
-        const categories = await Category.find().sort({ 'names.vi': 1, name: 1 }).lean()
+        const categories = await Category.find().sort({ sortOrder: 1, 'names.vi': 1, name: 1, _id: 1 }).lean()
         res.json({ success: true, data: categories.map(toResponseCategory) })
     } catch (error) {
         res.status(500).json({ success: false, message: 'Error fetching categories', error })
@@ -58,7 +59,9 @@ export const createCategory = async (req: Request, res: Response) => {
         if (existing) {
             return res.status(400).json({ success: false, message: 'Category already exists' })
         }
-        const category = new Category({ names })
+        const sortOrder = Number(req.body.sortOrder ?? 0)
+        if (!Number.isInteger(sortOrder) || sortOrder < 0) return res.status(400).json({ success: false, message: 'Sort order must be a non-negative integer' })
+        const category = new Category({ names, sortOrder })
         await category.save()
         await emitCatalogEventToStores('catalog.changed', { entity: 'category', categoryId: String(category._id), changedFields: ['created'] })
         res.status(201).json({ success: true, data: category })
@@ -80,8 +83,14 @@ export const updateCategory = async (req: any, res: any) => {
         const { id } = req.params
         const names = getCategoryNames(req.body.names)
         if (!names) return res.status(400).json({ success: false, message: 'All category names are required' })
-        const updated = await Category.findByIdAndUpdate(id, { $set: { names }, $unset: { name: 1 } }, { returnDocument: 'after', runValidators: true })
-        if (updated) await emitCatalogEventToStores('catalog.changed', { entity: 'category', categoryId: String(id), changedFields: ['names'] })
+        const update: any = { $set: { names }, $unset: { name: 1 } }
+        if (req.body.sortOrder !== undefined) {
+            const sortOrder = Number(req.body.sortOrder)
+            if (!Number.isInteger(sortOrder) || sortOrder < 0) return res.status(400).json({ success: false, message: 'Sort order must be a non-negative integer' })
+            update.$set.sortOrder = sortOrder
+        }
+        const updated = await Category.findByIdAndUpdate(id, update, { returnDocument: 'after', runValidators: true })
+        if (updated) await emitCatalogEventToStores('catalog.changed', { entity: 'category', categoryId: String(id), changedFields: Object.keys(req.body).filter((field) => field === 'names' || field === 'sortOrder') })
         res.json({ success: true, data: updated })
     } catch (error: any) {
         if (error?.code === 11000) return res.status(409).json({ success: false, message: duplicateCategoryError(error) })

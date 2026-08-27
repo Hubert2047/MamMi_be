@@ -28,7 +28,7 @@ export async function getPublicMenu(storeId: string) {
     const storeItems = await StoreItem.find({ storeId, permanentlyActive: true, temporarilyUnavailable: false }).populate({
         path: 'itemId',
         populate: [
-            { path: 'categoryId', select: 'names name' },
+            { path: 'categoryId', select: 'names name sortOrder' },
             { path: 'addons', select: 'names name' },
             { path: 'components.itemId', select: 'names noteOptions' },
         ],
@@ -37,7 +37,17 @@ export async function getPublicMenu(storeId: string) {
     const storeAddons = await StoreAddon.find({ storeId, addonId: { $in: addonIds }, permanentlyActive: true, temporarilyUnavailable: false }).lean()
     const storeAddonById = new Map(storeAddons.map((addon: any) => [String(addon.addonId), addon]))
 
-    return storeItems.flatMap((storeItem: any) => {
+    const orderedStoreItems = [...storeItems].sort((left: any, right: any) => {
+        const leftCategory = left.itemId?.categoryId
+        const rightCategory = right.itemId?.categoryId
+        const orderDifference = (Number(leftCategory?.sortOrder) || 0) - (Number(rightCategory?.sortOrder) || 0)
+        if (orderDifference) return orderDifference
+        const leftName = leftCategory?.names?.vi || leftCategory?.name || ''
+        const rightName = rightCategory?.names?.vi || rightCategory?.name || ''
+        return leftName.localeCompare(rightName)
+    })
+
+    return orderedStoreItems.flatMap((storeItem: any) => {
         const item = storeItem.itemId
         if (!item) return []
         const basePrice = Number(storeItem.price?.base ?? 0)
@@ -47,7 +57,11 @@ export async function getPublicMenu(storeId: string) {
             id: String(item._id),
             names: normalizeNames(item.names),
             description: normalizeNames(item.description),
-            category: { id: String(category?._id || ''), names: normalizeNames(category?.names || { vi: category?.name || '' }) },
+            imageUrl: typeof item.imageUrl === 'string' && item.imageUrl.trim() ? item.imageUrl : undefined,
+            recommended: item.recommended === true,
+            popular: item.popular === true,
+            new: item.new === true,
+            category: { id: String(category?._id || ''), names: normalizeNames(category?.names || { vi: category?.name || '' }), sortOrder: Number.isFinite(category?.sortOrder) ? category.sortOrder : 0 },
             price: basePrice,
             variants: normalizeOptions(item.variants, 'variant'),
             noteOptions: normalizeOptions(item.noteOptions, 'note'),

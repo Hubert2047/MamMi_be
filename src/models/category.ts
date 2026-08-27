@@ -8,6 +8,7 @@ export interface ICategory extends Document {
   };
   /** Legacy field kept so existing documents can be read and migrated on update. */
   name?: string;
+  sortOrder: number;
 }
 
 const CategorySchema = new Schema<ICategory>({
@@ -17,6 +18,7 @@ const CategorySchema = new Schema<ICategory>({
     'zh-TW': { type: String, default: '', trim: true },
   },
   name: { type: String, trim: true },
+  sortOrder: { type: Number, default: 0, min: 0 },
 });
 
 export default mongoose.model<ICategory>("Category", CategorySchema);

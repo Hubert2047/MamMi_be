@@ -6,6 +6,7 @@ import { Role } from '../middlewares/auth.js'
 import { emitCatalogEventToStores, emitStoreEvent } from '../realtime.js'
 import { calculatePromotionPricing, isPromotionAvailableAt, type PricePromotion } from '../utils/promotionCalculations.js'
 import { expireEndedPromotions } from '../services/promotionPricing.js'
+import { deleteCloudinaryImage } from '../services/cloudinary.js'
 
 type Names = { vi: string; en: string; 'zh-TW': string }
 const namesOf = (value: unknown): Names | null => {
@@ -18,7 +19,7 @@ const isValidRules = (rules: unknown) => Array.isArray(rules) && rules.length > 
 const hasValidWindow = (startsAt: unknown, endsAt: unknown) => !startsAt || !endsAt || new Date(String(startsAt)).getTime() <= new Date(String(endsAt)).getTime()
 const isEditableStatus = (status: unknown): status is 'draft' | 'active' => status === 'draft' || status === 'active'
 const responseFor = (promotion: any, config: any, language: string) => ({
-    _id: String(promotion._id), names: promotion.names, name: nameFor(promotion.names, language), mode: promotion.mode,
+    _id: String(promotion._id), names: promotion.names, name: nameFor(promotion.names, language), imageUrl: promotion.imageUrl || undefined, imagePublicId: promotion.imagePublicId || undefined, mode: promotion.mode,
     minSubtotal: promotion.minSubtotal, priority: promotion.priority, combinable: promotion.combinable,
     exclusiveGroup: promotion.exclusiveGroup || '', rules: promotion.rules, status: promotion.status,
     version: promotion.version, startsAt: promotion.startsAt || null, endsAt: promotion.endsAt || null,
@@ -29,7 +30,9 @@ export const createPromotion = async (req: Request, res: Response) => {
     const names = namesOf(req.body.names)
     if (!names || !isValidRules(req.body.rules) || !req.body.startsAt || !req.body.endsAt || !hasValidWindow(req.body.startsAt, req.body.endsAt)) return res.status(400).json({ success: false, message: 'Promotion name, rules, start time, and end time are required' })
     const storeIds = Array.isArray(req.body.storeIds) ? req.body.storeIds : []
-    const promotion = await Promotion.create({ names, mode: req.body.mode === 'automatic' ? 'automatic' : 'manual', minSubtotal: req.body.minSubtotal || undefined, priority: Number(req.body.priority) || 0, combinable: req.body.combinable === true, exclusiveGroup: req.body.exclusiveGroup || undefined, rules: req.body.rules, status: req.body.status === 'active' ? 'active' : 'draft', startsAt: req.body.startsAt || undefined, endsAt: req.body.endsAt || undefined })
+    const imageUrl = req.body.imageUrl === undefined ? undefined : String(req.body.imageUrl).trim()
+    const imagePublicId = req.body.imagePublicId === undefined ? undefined : String(req.body.imagePublicId).trim()
+    const promotion = await Promotion.create({ names, ...(imageUrl ? { imageUrl } : {}), ...(imagePublicId ? { imagePublicId } : {}), mode: req.body.mode === 'automatic' ? 'automatic' : 'manual', minSubtotal: req.body.minSubtotal || undefined, priority: Number(req.body.priority) || 0, combinable: req.body.combinable === true, exclusiveGroup: req.body.exclusiveGroup || undefined, rules: req.body.rules, status: req.body.status === 'active' ? 'active' : 'draft', startsAt: req.body.startsAt || undefined, endsAt: req.body.endsAt || undefined })
     if (storeIds.length) await StorePromotion.insertMany(storeIds.map((storeId: string) => ({ storeId, promotionId: promotion._id, enabled: req.body.enabled === true })))
     await emitCatalogEventToStores('catalog.changed', { entity: 'promotion', promotionId: String(promotion._id), changedFields: ['created'] }, storeIds)
     res.status(201).json({ success: true, data: responseFor(promotion, { enabled: req.body.enabled === true }, String(req.query.lang || 'vi')) })
@@ -59,8 +62,12 @@ export const updatePromotion = async (req: Request, res: Response) => {
     const update: Record<string, unknown> = {}
     for (const key of ['mode', 'minSubtotal', 'priority', 'combinable', 'exclusiveGroup', 'rules', 'status', 'startsAt', 'endsAt']) if (req.body[key] !== undefined) update[key] = req.body[key]
     if (names) update.names = names
+    if (req.body.imageUrl !== undefined) update.imageUrl = String(req.body.imageUrl).trim()
+    if (req.body.imagePublicId !== undefined) update.imagePublicId = String(req.body.imagePublicId).trim()
+    const previous = await Promotion.findById(req.params.id).select({ imagePublicId: 1 }).lean()
     const promotion = await Promotion.findByIdAndUpdate(req.params.id, { $set: update, $inc: { version: 1 } }, { returnDocument: 'after', runValidators: true }).lean()
     if (!promotion) return res.status(404).json({ success: false, message: 'Promotion not found' })
+    if (previous?.imagePublicId && previous.imagePublicId !== promotion.imagePublicId) void deleteCloudinaryImage(previous.imagePublicId).catch((error) => console.error('Failed to delete old promotion image:', error))
     if (Array.isArray(req.body.storeIds)) {
         const storeIds = req.body.storeIds.map(String)
         await StorePromotion.deleteMany({ promotionId: promotion._id, storeId: { $nin: storeIds } })
@@ -86,6 +93,7 @@ export const deletePromotion = async (req: Request, res: Response) => {
     if (!promotion) return res.status(404).json({ success: false, message: 'Promotion not found' })
     const configs = await StorePromotion.find({ promotionId: promotion._id }).lean()
     await StorePromotion.deleteMany({ promotionId: promotion._id })
+    if (promotion.imagePublicId) void deleteCloudinaryImage(promotion.imagePublicId).catch((error) => console.error('Failed to delete promotion image:', error))
     await emitCatalogEventToStores('catalog.changed', { entity: 'promotion', promotionId: String(promotion._id), changedFields: ['deleted'] }, configs.map((config) => String(config.storeId)))
     res.json({ success: true })
 }

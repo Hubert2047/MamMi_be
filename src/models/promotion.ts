@@ -3,6 +3,8 @@ import mongoose, { Schema, type Document } from 'mongoose'
 export type PromotionRuleTarget = 'order' | 'product' | 'addon' | 'line'
 export interface IPromotion extends Document {
     names: { vi: string; en: string; 'zh-TW': string }
+    imageUrl?: string
+    imagePublicId?: string
     mode: 'automatic' | 'manual'
     minSubtotal?: number
     priority: number
@@ -24,6 +26,8 @@ const PromotionRuleSchema = new Schema({
 
 const PromotionSchema = new Schema<IPromotion>({
     names: { vi: { type: String, default: '' }, en: { type: String, default: '' }, 'zh-TW': { type: String, default: '' } },
+    imageUrl: { type: String, trim: true },
+    imagePublicId: { type: String, trim: true },
     mode: { type: String, enum: ['automatic', 'manual'], required: true },
     minSubtotal: { type: Number, min: 0 },
     priority: { type: Number, default: 0 },

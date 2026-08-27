@@ -62,6 +62,7 @@ export const applyPublicMenuPromotionDisplays = (items: any[], promotions: any[]
     return {
         ...item,
         displayPrice,
+        promotion: displayPrice < item.price,
         addons: item.addons.map((addon: any) => {
             const addonMatches = (rule: any) => rule.target === 'addon' && (!rule.productIds.length || rule.productIds.includes(item.id)) && (!rule.addonIds.length || rule.addonIds.includes(addon.id))
             const addonDisplayPrice = accepted(addonMatches).reduce((price, promotion) => promotion.rules.filter(addonMatches).reduce((value: number, rule: any) => value - displayDiscount(value, rule.reward), price), addon.priceExtra)

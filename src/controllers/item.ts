@@ -9,6 +9,7 @@ import Store from '../models/store.js'
 import { Role } from '../constants/role.js'
 import { nextStoreMidnight } from '../utils/storeAvailability.js'
 import { emitCatalogEventToStores, emitStoreEvent } from '../realtime.js'
+import { deleteCloudinaryImage } from '../services/cloudinary.js'
 
 const optionLabel = (value: string) => value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'option'
 const normalizeNames = (value: unknown) => {
@@ -42,6 +43,7 @@ const toCatalogItem = (item: any, language: string) => ({
     noteOptions: normalizeOptions(item.noteOptions, 'note'),
     name: item.names?.[language] || item.names?.vi || Object.values(item.names || {})[0] || '',
     categoryName: item.categoryId?.names?.[language] || item.categoryId?.names?.vi || item.categoryId?.name || '',
+    categorySortOrder: Number.isFinite(item.categoryId?.sortOrder) ? item.categoryId.sortOrder : 0,
 })
 
 const clearExpiredTemporaryAvailability = async (storeId: string) => {
@@ -65,7 +67,7 @@ const getStoreTimeZone = async (storeId: string) => {
 export const getCatalogItems = async (req: Request, res: Response) => {
     try {
         const language = typeof req.query.lang === 'string' ? req.query.lang : 'vi'
-        const items = await Item.find().populate('categoryId', 'names name').populate('addons', 'names name').lean()
+        const items = await Item.find().populate('categoryId', 'names name sortOrder').populate('addons', 'names name').lean()
         res.json({ success: true, data: items.map((item) => toCatalogItem(item, language)) })
     } catch (error) { res.status(500).json({ success: false, message: 'Error fetching catalog items', error }) }
 }
@@ -76,6 +78,8 @@ export const createCatalogItem = async (req: Request, res: Response) => {
         if (!names) return res.status(400).json({ success: false, message: 'At least one product name is required' })
         const description = req.body.description === undefined ? undefined : normalizeNames(req.body.description)
         const { price: _price, active: _active, ...data } = req.body
+        if (data.imageUrl !== undefined && typeof data.imageUrl !== 'string') return res.status(400).json({ success: false, message: 'Image URL must be a string' })
+        if (data.imagePublicId !== undefined && typeof data.imagePublicId !== 'string') return res.status(400).json({ success: false, message: 'Image public ID must be a string' })
         const type = req.body.type === 'combo' ? 'combo' : 'product'
         const item = await Item.create({ ...data, type, addons: type === 'combo' ? [] : (Array.isArray(req.body.addons) ? req.body.addons : []), components: type === 'combo' ? normalizeComponents(req.body.components) : [], names, ...(description ? { description } : {}), variants: normalizeOptions(req.body.variants, 'variant'), noteOptions: normalizeOptions(req.body.noteOptions, 'note') })
         await emitCatalogEventToStores('catalog.item.updated', { itemId: String(item._id), changedFields: ['created'] })
@@ -90,10 +94,14 @@ export const updateCatalogItem = async (req: Request, res: Response) => {
         if (req.body.names !== undefined && !names) return res.status(400).json({ success: false, message: 'At least one product name is required' })
         const description = req.body.description === undefined ? undefined : normalizeNames(req.body.description)
         const { price: _price, active: _active, ...data } = req.body
+        if (data.imageUrl !== undefined && typeof data.imageUrl !== 'string') return res.status(400).json({ success: false, message: 'Image URL must be a string' })
+        if (data.imagePublicId !== undefined && typeof data.imagePublicId !== 'string') return res.status(400).json({ success: false, message: 'Image public ID must be a string' })
         const nextType = req.body.type === 'combo' ? 'combo' : req.body.type === 'product' ? 'product' : undefined
         const update = { ...data, ...(nextType ? { type: nextType, ...(nextType === 'combo' ? { addons: [], components: normalizeComponents(req.body.components) } : {}) } : {}), ...(req.body.type !== 'combo' && req.body.components ? { components: normalizeComponents(req.body.components) } : {}), ...(nextType !== 'combo' && req.body.addons ? { addons: req.body.addons } : {}), ...(names ? { names } : {}), ...(description ? { description } : {}), ...(req.body.variants ? { variants: normalizeOptions(req.body.variants, 'variant') } : {}), ...(req.body.noteOptions ? { noteOptions: normalizeOptions(req.body.noteOptions, 'note') } : {}) }
+        const previous = await Item.findById(id).select({ imagePublicId: 1 }).lean()
         const item = await Item.findByIdAndUpdate(id, update, { returnDocument: 'after', runValidators: true })
         if (!item) return res.status(404).json({ success: false, message: 'Catalog item not found' })
+        if (previous?.imagePublicId && previous.imagePublicId !== item.imagePublicId) void deleteCloudinaryImage(previous.imagePublicId).catch((error) => console.error('Failed to delete old product image:', error))
         await emitCatalogEventToStores('catalog.item.updated', { itemId: id, changedFields: Object.keys(req.body) })
         res.json({ success: true, data: item })
     } catch (error) { res.status(400).json({ success: false, message: 'Error updating catalog item', error }) }
@@ -106,6 +114,7 @@ export const deleteCatalogItem = async (req: Request, res: Response) => {
         if (!item) return res.status(404).json({ success: false, message: 'Catalog item not found' })
         await StoreItem.deleteMany({ itemId: id })
         await Item.findByIdAndDelete(id)
+        if (item.imagePublicId) void deleteCloudinaryImage(item.imagePublicId).catch((error) => console.error('Failed to delete product image:', error))
         await emitCatalogEventToStores('catalog.item.updated', { itemId: id, changedFields: ['deleted'] })
         res.json({ success: true, data: item })
     } catch (error) { res.status(400).json({ success: false, message: 'Error deleting catalog item', error }) }
