@@ -1,6 +1,6 @@
 import mongoose, { Schema, type Document } from 'mongoose'
 
-export const lineNotificationTypes = ['daily_closing', 'new_order'] as const
+export const lineNotificationTypes = ['daily_closing'] as const
 export type LineNotificationType = (typeof lineNotificationTypes)[number]
 
 export interface ILineGroup extends Document {
