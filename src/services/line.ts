@@ -1,4 +1,5 @@
 import { Client } from '@line/bot-sdk'
+import LineGroup, { type LineNotificationType } from '../models/line-group.js'
 
 export const sendMessageToGroup = async (groupId: string, text: string) => {
     const client = new Client({
@@ -14,4 +15,9 @@ export const sendMessageToGroup = async (groupId: string, text: string) => {
     } catch (error) {
         console.error('Gửi tin thất bại:', error)
     }
+}
+
+export const sendMessageToConfiguredGroups = async (storeId: string, type: LineNotificationType, text: string) => {
+    const groups = await LineGroup.find({ storeId, status: 'active', enabled: true, notificationTypes: type }).select({ lineGroupId: 1 }).lean()
+    await Promise.all(groups.map((group) => sendMessageToGroup(group.lineGroupId, text)))
 }

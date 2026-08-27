@@ -1,5 +1,6 @@
 import type { Request, Response } from 'express'
 import { Client } from '@line/bot-sdk'
+import LineGroup from '../models/line-group.js'
 
 export const handleWebhook = async (req: Request, res: Response) => {
     try {
@@ -9,9 +10,16 @@ export const handleWebhook = async (req: Request, res: Response) => {
         }
         const client = new Client(config)
         const events = req.body.events
-        console.log('run in', events)
-
         if (!events || !events.length) return res.status(200).send('No events')
+
+        await Promise.all(events.map(async (event: any) => {
+            if (event.source?.type !== 'group' || typeof event.source.groupId !== 'string') return
+            await LineGroup.updateOne(
+                { lineGroupId: event.source.groupId },
+                { $setOnInsert: { lineGroupId: event.source.groupId, name: 'LINE group', enabled: false, status: 'pending', notificationTypes: [] } },
+                { upsert: true },
+            )
+        }))
 
         // await Promise.all(
         //     events.map(async (event: any) => {

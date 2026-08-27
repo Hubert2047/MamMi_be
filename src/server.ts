@@ -39,6 +39,7 @@ import publicOrder from './routers/public-order.js'
 import storeTable from './routers/store-table.js'
 import posDevice from './routers/pos-device.js'
 import upload from './routers/upload.js'
+import lineGroup from './routers/line-group.js'
 dotenv.config()
 
 
@@ -73,6 +74,7 @@ const app: Application = express()
         credentials: true,
     }))
     app.use('/api/webhook', webhook)
+    app.use('/api/line-groups', lineGroup)
     app.use(bodyParser.urlencoded({ extended: false }))
     app.use(express.json())
     app.use('/api/refresh-token', refreshTokenRoutes)
