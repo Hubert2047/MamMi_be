@@ -4,6 +4,7 @@ import LineGroup, { lineNotificationTypes, type LineNotificationType } from '../
 import Store from '../models/store.js'
 import type { AuthRequest } from '../middlewares/auth.js'
 import { Role } from '../constants/role.js'
+import { sendMessageToGroup } from '../services/line.js'
 
 const currentStoreId = (req: Request) => (req as AuthRequest).user.storeId
 
@@ -43,4 +44,25 @@ export const updateLineGroup = async (req: Request, res: Response) => {
     else existing.status = 'pending'
     await existing.save()
     res.json({ success: true, data: existing })
+}
+
+export const deleteLineGroup = async (req: Request, res: Response) => {
+    const id = String(req.params.id)
+    if (!mongoose.isValidObjectId(id)) return res.status(400).json({ message: 'Invalid LINE group id' })
+
+    const group = await LineGroup.findByIdAndDelete(id)
+    if (!group) return res.status(404).json({ message: 'LINE group not found' })
+    res.json({ success: true })
+}
+
+export const testLineGroup = async (req: Request, res: Response) => {
+    const id = String(req.params.id)
+    if (!mongoose.isValidObjectId(id)) return res.status(400).json({ message: 'Invalid LINE group id' })
+
+    const group = await LineGroup.findById(id).select({ lineGroupId: 1 }).lean()
+    if (!group) return res.status(404).json({ message: 'LINE group not found' })
+
+    const sent = await sendMessageToGroup(group.lineGroupId, 'Đây là tin nhắn kiểm tra từ MamMi. LINE Group đã kết nối thành công.')
+    if (!sent) return res.status(502).json({ message: 'Unable to send LINE test message' })
+    res.json({ success: true })
 }

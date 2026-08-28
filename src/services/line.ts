@@ -1,7 +1,7 @@
 import { Client } from '@line/bot-sdk'
 import LineGroup, { type LineNotificationType } from '../models/line-group.js'
 
-export const sendMessageToGroup = async (groupId: string, text: string) => {
+export const sendMessageToGroup = async (groupId: string, text: string): Promise<boolean> => {
     const client = new Client({
         channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN!,
         channelSecret: process.env.LINE_CHANNEL_SECRET!,
@@ -12,8 +12,10 @@ export const sendMessageToGroup = async (groupId: string, text: string) => {
             type: 'text',
             text,
         })
+        return true
     } catch (error) {
         console.error('Gửi tin thất bại:', error)
+        return false
     }
 }
 
