@@ -74,6 +74,7 @@ const OrderItemAddonSchema = new Schema<OrderItemAddon>(
     {
         id: String,
         name: String,
+        printName: String,
         priceExtra: Number,
         amount: Number,
     },
