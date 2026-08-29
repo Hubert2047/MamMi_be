@@ -3,6 +3,7 @@ import Order from '../models/order.js'
 import StoreAddon from '../models/store-addon.js'
 import StoreItem from '../models/store-item.js'
 import Item from '../models/item.js'
+import Addon from '../models/addon.js'
 import mongoose from 'mongoose'
 import { getFromDayUntilNow, getFullDay } from '../utils/index.js'
 import { calculateTotal } from '../utils/orderCalculations.js'
@@ -129,6 +130,10 @@ export const createOrder = async (req: Request, res: Response) => {
             if (availableAddons !== validAddonIds.length) return res.status(400).json({ success: false, code: 'ADDON_NOT_AVAILABLE', message: 'One or more selected add-ons are no longer available' })
         }
 
+        const addonCatalog = validAddonIds.length
+            ? await Addon.find({ _id: { $in: validAddonIds } }).select('names name').lean()
+            : []
+        const addonById = new Map(addonCatalog.map((addon: any) => [String(addon._id), addon]))
         const catalogItems = await Item.find({ _id: { $in: validItemIds } }).select('names variants noteOptions optionGroups addons').populate('addons', 'names name').lean()
         const catalogById = new Map(catalogItems.map((catalogItem: any) => [String(catalogItem._id), catalogItem]))
         const chineseName = (value: any) => value?.names?.['zh-TW'] || value?.names?.vi || value?.names?.en || value?.name || ''
@@ -142,7 +147,7 @@ export const createOrder = async (req: Request, res: Response) => {
             const selectedVariant = catalogItem?.variants?.find((option: any) => option?.id === item.variant) || item.variant
             const selectedNoteOptions = (item.noteOptions || []).map((selectedOption: any) => catalogItem?.noteOptions?.find((option: any) => option?.id === selectedOption) || selectedOption)
             const selectedAddons = (item.addons || []).map((addon: any) => {
-                const catalogAddon = catalogItem?.addons?.find((candidate: any) => String(candidate?._id) === String(addon.id))
+                const catalogAddon = addonById.get(String(addon.id)) || catalogItem?.addons?.find((candidate: any) => String(candidate?._id) === String(addon.id))
                 return { ...addon, printName: chineseName(catalogAddon) || addon.name }
             })
             const printNoteOptions = selectedNoteOptions.map((selectedOption: any) => optionName(selectedOption))
