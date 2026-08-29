@@ -5,17 +5,18 @@ import PrintRouting from '../models/print-routing.js'
 const retentionMs = 7 * 24 * 60 * 60 * 1000
 
 const typeLabel: Record<IOrder['type'], string> = {
-    dine_in: '內用',
+    dine_in: '內',
     takeaway: '外帶',
     uber: 'UBER',
     foodpanda: 'FOODPANDA',
 }
 
 function buildKitchenText(order: IOrder, item: IOrder['items'][number], index: number): string {
-    const dateTime = new Date().toLocaleString('zh-TW', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+    const dateTime = new Intl.DateTimeFormat('zh-TW', { timeZone: 'Asia/Taipei', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date()).replace(',', '')
+    const tableLabel = order.type === 'dine_in' && String(order.table || '').trim() ? `(桌${String(order.table).trim()})` : ''
     const lines = [
-        `#${String(order.number).padStart(3, '0')}   ${typeLabel[order.type]}   ${dateTime}`,
-        `${item.printName || item.name}${item.printVariant || item.variant ? ` (${item.printVariant || item.variant})` : ''} x${item.quantity}`,
+        `#${String(order.number).padStart(3, '0')} ${typeLabel[order.type]}${tableLabel} ${dateTime}`,
+        `${item.printName || item.name}${item.printVariant || item.variant ? `(${item.printVariant || item.variant})` : ''} x${item.quantity}`,
     ]
     if (item.printNoteOptions?.length || item.noteOptions?.length) lines.push(`不加: ${(item.printNoteOptions || item.noteOptions).join(', ')}`)
     if (item.printAddons?.length || item.addons?.length) lines.push(`加點: ${(item.printAddons || item.addons).map((addon) => `${addon.printName || addon.name}${addon.amount > 1 ? ` x${addon.amount}` : ''}`).join(', ')}`)

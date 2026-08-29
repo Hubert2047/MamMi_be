@@ -13,7 +13,13 @@ export const getStoreTables = async (req: Request, res: Response) => {
     try {
         const storeId = (req as AuthRequest).user.storeId
         await expireSessions(storeId)
-        const tables = await StoreTable.find({ storeId }).select({ code: 1, name: 1, active: 1, qrToken: 1 }).sort({ code: 1 }).lean()
+        const tables = await StoreTable.find({ storeId }).select({ code: 1, name: 1, active: 1, qrToken: 1 }).lean()
+        tables.sort((left, right) => {
+            const leftCode = Number(String(left.code).trim())
+            const rightCode = Number(String(right.code).trim())
+            if (Number.isFinite(leftCode) && Number.isFinite(rightCode)) return leftCode - rightCode
+            return String(left.code).localeCompare(String(right.code), undefined, { numeric: true, sensitivity: 'base' })
+        })
         const sessions = await TableSession.find({ storeId, tableId: { $in: tables.map((table) => table._id) }, status: 'active' }).lean()
         const sessionsByTable = new Map(sessions.map((session) => [String(session.tableId), session]))
         res.json({ success: true, data: tables.map((table) => ({ ...table, session: serializeSession(sessionsByTable.get(String(table._id)) ?? null) })) })

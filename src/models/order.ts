@@ -17,6 +17,7 @@ interface OrderItem {
     variant: string
     addons: OrderItemAddon[]
     noteOptions: string[]
+    optionSelections?: { groupId: string; optionId: string; name?: string }[]
     note: string
     componentSelections?: { componentId: string; itemId: string; noteOptions: string[]; note: string; name?: string }[]
     printName?: string
@@ -100,6 +101,7 @@ const OrderItemSchema = new Schema<OrderItem>(
         variant: String,
         addons: [OrderItemAddonSchema],
         noteOptions: [String],
+        optionSelections: [{ groupId: String, optionId: String, name: String }],
         note: String,
         componentSelections: [{ componentId: String, itemId: String, noteOptions: [String], note: String }],
         printName: String,

@@ -6,7 +6,12 @@ import type { AuthRequest } from '../middlewares/auth.js'
 const hash = (value: string) => createHash('sha256').update(value).digest('hex')
 const enrollmentCode = () => randomInt(100000, 1000000).toString()
 const deviceToken = () => randomBytes(32).toString('base64url')
-const cookieOptions = { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'strict' as const, maxAge: 1000 * 60 * 60 * 24 * 365 }
+const cookieOptions = {
+    httpOnly: true,
+    secure: process.env.COOKIE_SECURE === 'true' || (process.env.FRONTEND_URL || '').startsWith('https://'),
+    sameSite: 'strict' as const,
+    maxAge: 1000 * 60 * 60 * 24 * 365,
+}
 
 function cleanExpiredEnrollment(device: any) {
     return device.pendingEnrollmentExpiresAt && device.pendingEnrollmentExpiresAt.getTime() <= Date.now()

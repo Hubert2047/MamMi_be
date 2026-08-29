@@ -123,7 +123,7 @@ export const createOrder = async (req: Request, res: Response) => {
             if (availableAddons !== validAddonIds.length) return res.status(400).json({ success: false, code: 'ADDON_NOT_AVAILABLE', message: 'One or more selected add-ons are no longer available' })
         }
 
-        const catalogItems = await Item.find({ _id: { $in: validItemIds } }).select('names variants noteOptions addons').populate('addons', 'names name').lean()
+        const catalogItems = await Item.find({ _id: { $in: validItemIds } }).select('names variants noteOptions optionGroups addons').populate('addons', 'names name').lean()
         const catalogById = new Map(catalogItems.map((catalogItem: any) => [String(catalogItem._id), catalogItem]))
         const chineseName = (value: any) => value?.names?.['zh-TW'] || value?.names?.vi || value?.names?.en || value?.name || ''
         const optionName = (option: any) => {
@@ -140,6 +140,17 @@ export const createOrder = async (req: Request, res: Response) => {
                 return { ...addon, printName: chineseName(catalogAddon) || addon.name }
             })
             const printNoteOptions = selectedNoteOptions.map((selectedOption: any) => optionName(selectedOption))
+            const requestedSelections = Array.isArray(item.optionSelections) ? item.optionSelections : []
+            const optionSelections = requestedSelections.map((selection: any) => {
+                const group = (catalogItem?.optionGroups || []).find((candidate: any) => candidate.id === selection?.groupId)
+                const option = group?.options?.find((candidate: any) => candidate.id === selection?.optionId)
+                if (!group || !option) throw new Error('Invalid product option selection')
+                return { groupId: group.id, optionId: option.id, name: optionName(option) }
+            })
+            for (const group of catalogItem?.optionGroups || []) {
+                if (group.required && !optionSelections.some((selection: any) => selection.groupId === group.id)) throw new Error('Required product option is missing')
+                if (group.selection === 'single' && optionSelections.filter((selection: any) => selection.groupId === group.id).length > 1) throw new Error('Only one option may be selected')
+            }
             return {
                 id: item.id,
                 itemId: item.itemId,
@@ -154,6 +165,7 @@ export const createOrder = async (req: Request, res: Response) => {
                 printVariant: optionName(selectedVariant),
                 printAddons: selectedAddons,
                 printNoteOptions,
+                optionSelections,
             }
         })
 

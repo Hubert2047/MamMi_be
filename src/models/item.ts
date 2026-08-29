@@ -10,6 +10,7 @@ export interface IItem extends Document {
     popular: boolean
     new: boolean
     variants: Array<LocalizedOption | string>
+    optionGroups: OptionGroup[]
     categoryId: mongoose.Types.ObjectId
     addons: mongoose.Types.ObjectId[]
     noteOptions: Array<LocalizedOption | string>
@@ -19,6 +20,15 @@ export interface IItem extends Document {
 export interface LocalizedOption {
     id: string
     names: { vi: string; en: string; 'zh-TW': string }
+}
+
+export interface OptionGroup {
+    id: string
+    names: { vi: string; en: string; 'zh-TW': string }
+    selection: 'single' | 'multiple'
+    required: boolean
+    defaultOptionId?: string
+    options: LocalizedOption[]
 }
 
 const ItemSchema = new Schema<IItem>(
@@ -33,6 +43,7 @@ const ItemSchema = new Schema<IItem>(
         new: { type: Boolean, default: false },
         // Mixed keeps legacy string arrays readable while the controller normalizes new data.
         variants: { type: [Schema.Types.Mixed], default: [] },
+        optionGroups: { type: Schema.Types.Mixed, default: [] },
         addons: [{ type: Schema.Types.ObjectId, ref: 'Addon' }],
         categoryId: {
             type: Schema.Types.ObjectId,

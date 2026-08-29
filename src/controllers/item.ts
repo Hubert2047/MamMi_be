@@ -1,6 +1,6 @@
 import type { Request, Response } from 'express'
 import Item from '../models/item.js'
-import type { LocalizedOption } from '../models/item.js'
+import type { LocalizedOption, OptionGroup } from '../models/item.js'
 import mongoose from 'mongoose'
 import StoreItem from '../models/store-item.js'
 import StoreAddon from '../models/store-addon.js'
@@ -34,6 +34,14 @@ const normalizeOptions = (options: unknown, prefix: string): LocalizedOption[] =
         },
     }
 })
+const normalizeOptionGroups = (groups: unknown): OptionGroup[] => (Array.isArray(groups) ? groups : []).map((group: any, index) => ({
+    id: typeof group?.id === 'string' && group.id.trim() ? group.id.trim() : `group-${index + 1}`,
+    names: normalizeNames(group?.names) || { vi: '', en: '', 'zh-TW': '' },
+    selection: (group?.selection === 'multiple' ? 'multiple' : 'single') as 'single' | 'multiple',
+    required: group?.required === true,
+    ...(typeof group?.defaultOptionId === 'string' && group.defaultOptionId.trim() ? { defaultOptionId: group.defaultOptionId.trim() } : {}),
+    options: normalizeOptions(group?.options, `group-${index + 1}-option`),
+})).filter((group) => group.names.vi || group.names.en || group.names['zh-TW'])
 const normalizeComponents = (components: unknown) => (Array.isArray(components) ? components : []).map((component: any) => ({ itemId: component.itemId, quantity: Math.max(1, Number(component.quantity) || 1) }))
 
 const toCatalogItem = (item: any, language: string) => ({
@@ -41,6 +49,7 @@ const toCatalogItem = (item: any, language: string) => ({
     type: item.type || 'product',
     variants: normalizeOptions(item.variants, 'variant'),
     noteOptions: normalizeOptions(item.noteOptions, 'note'),
+    optionGroups: normalizeOptionGroups(item.optionGroups),
     name: item.names?.[language] || item.names?.vi || Object.values(item.names || {})[0] || '',
     categoryName: item.categoryId?.names?.[language] || item.categoryId?.names?.vi || item.categoryId?.name || '',
     categorySortOrder: Number.isFinite(item.categoryId?.sortOrder) ? item.categoryId.sortOrder : 0,
@@ -81,7 +90,7 @@ export const createCatalogItem = async (req: Request, res: Response) => {
         if (data.imageUrl !== undefined && typeof data.imageUrl !== 'string') return res.status(400).json({ success: false, message: 'Image URL must be a string' })
         if (data.imagePublicId !== undefined && typeof data.imagePublicId !== 'string') return res.status(400).json({ success: false, message: 'Image public ID must be a string' })
         const type = req.body.type === 'combo' ? 'combo' : 'product'
-        const item = await Item.create({ ...data, type, addons: type === 'combo' ? [] : (Array.isArray(req.body.addons) ? req.body.addons : []), components: type === 'combo' ? normalizeComponents(req.body.components) : [], names, ...(description ? { description } : {}), variants: normalizeOptions(req.body.variants, 'variant'), noteOptions: normalizeOptions(req.body.noteOptions, 'note') })
+        const item = await Item.create({ ...data, type, addons: type === 'combo' ? [] : (Array.isArray(req.body.addons) ? req.body.addons : []), components: type === 'combo' ? normalizeComponents(req.body.components) : [], names, ...(description ? { description } : {}), variants: normalizeOptions(req.body.variants, 'variant'), optionGroups: normalizeOptionGroups(req.body.optionGroups), noteOptions: normalizeOptions(req.body.noteOptions, 'note') })
         await emitCatalogEventToStores('catalog.item.updated', { itemId: String(item._id), changedFields: ['created'] })
         res.status(201).json({ success: true, data: item })
     } catch (error) { res.status(400).json({ success: false, message: 'Error creating catalog item', error }) }
@@ -97,7 +106,7 @@ export const updateCatalogItem = async (req: Request, res: Response) => {
         if (data.imageUrl !== undefined && typeof data.imageUrl !== 'string') return res.status(400).json({ success: false, message: 'Image URL must be a string' })
         if (data.imagePublicId !== undefined && typeof data.imagePublicId !== 'string') return res.status(400).json({ success: false, message: 'Image public ID must be a string' })
         const nextType = req.body.type === 'combo' ? 'combo' : req.body.type === 'product' ? 'product' : undefined
-        const update = { ...data, ...(nextType ? { type: nextType, ...(nextType === 'combo' ? { addons: [], components: normalizeComponents(req.body.components) } : {}) } : {}), ...(req.body.type !== 'combo' && req.body.components ? { components: normalizeComponents(req.body.components) } : {}), ...(nextType !== 'combo' && req.body.addons ? { addons: req.body.addons } : {}), ...(names ? { names } : {}), ...(description ? { description } : {}), ...(req.body.variants ? { variants: normalizeOptions(req.body.variants, 'variant') } : {}), ...(req.body.noteOptions ? { noteOptions: normalizeOptions(req.body.noteOptions, 'note') } : {}) }
+        const update = { ...data, ...(nextType ? { type: nextType, ...(nextType === 'combo' ? { addons: [], components: normalizeComponents(req.body.components) } : {}) } : {}), ...(req.body.type !== 'combo' && req.body.components ? { components: normalizeComponents(req.body.components) } : {}), ...(nextType !== 'combo' && req.body.addons ? { addons: req.body.addons } : {}), ...(names ? { names } : {}), ...(description ? { description } : {}), ...(req.body.variants ? { variants: normalizeOptions(req.body.variants, 'variant') } : {}), ...(req.body.optionGroups ? { optionGroups: normalizeOptionGroups(req.body.optionGroups) } : {}), ...(req.body.noteOptions ? { noteOptions: normalizeOptions(req.body.noteOptions, 'note') } : {}) }
         const previous = await Item.findById(id).select({ imagePublicId: 1 }).lean()
         const item = await Item.findByIdAndUpdate(id, update, { returnDocument: 'after', runValidators: true })
         if (!item) return res.status(404).json({ success: false, message: 'Catalog item not found' })
