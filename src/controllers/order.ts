@@ -20,6 +20,8 @@ import { allocateOrderSequence, getCurrentOrderPeriodId, getNextOrderSequence } 
 import { createKitchenPrintJobs } from '../services/printJobs.js'
 import { expireEndedPromotions } from '../services/promotionPricing.js'
 
+const MAX_NOTE_LENGTH = 40
+
 const calculatePromotionsForOrder = async (storeId: string, items: PromotionOrderItem[], selectedPromotionIds: string[] = []) => {
     const now = new Date()
     await expireEndedPromotions(now)
@@ -88,6 +90,10 @@ export const createOrder = async (req: Request, res: Response) => {
 
         if (!order.items || order.items.length === 0) {
             return res.status(400).json({ success: false, message: 'Items is required' })
+        }
+        const noteValues = order.items.flatMap((item: any) => [item.note, ...(Array.isArray(item.componentSelections) ? item.componentSelections.map((component: any) => component.note) : [])])
+        if (noteValues.some((note: any) => typeof note === 'string' && note.length > MAX_NOTE_LENGTH)) {
+            return res.status(400).json({ success: false, code: 'NOTE_TOO_LONG', message: `Notes cannot exceed ${MAX_NOTE_LENGTH} characters` })
         }
         if (order.type === 'dine_in' && !String(order.table || '').trim()) {
             return res.status(400).json({ success: false, code: 'TABLE_REQUIRED', message: 'A table is required for dine-in orders' })
