@@ -464,3 +464,28 @@ export const updatePendingOrder = async (req: Request, res: Response) => {
         res.status(400).json({ success: false, message: 'Error updating order', error })
     }
 }
+
+/** Updates contact metadata only; this never changes pricing or payment state. */
+export const updateOrderCustomer = async (req: Request, res: Response) => {
+    try {
+        const id = String(req.params.id)
+        const storeId = (req as AuthRequest).user.storeId
+        const customer = req.body?.customer
+        if (!customer || typeof customer !== 'object') return res.status(400).json({ success: false, code: 'CUSTOMER_REQUIRED', message: 'Customer details are required' })
+
+        const name = typeof customer.name === 'string' ? customer.name.trim().slice(0, 120) : ''
+        const phone = typeof customer.phone === 'string' ? customer.phone.trim().slice(0, 40) : ''
+        const updated = await Order.findOneAndUpdate(
+            { _id: id, storeId, customer: { $ne: null } },
+            { $set: { 'customer.name': name, 'customer.phone': phone }, $inc: { version: 1 } },
+            { returnDocument: 'after', includeResultMetadata: false },
+        )
+        if (!updated) return res.status(404).json({ success: false, code: 'CUSTOMER_NOT_AVAILABLE', message: 'Customer details are not available for this order' })
+
+        emitStoreEvent(storeId, 'order.updated', { orderId: String(updated._id), changedFields: ['customer'] })
+        res.json({ success: true, data: updated })
+    } catch (error) {
+        console.error('Error updating order customer:', error)
+        res.status(400).json({ success: false, message: 'Error updating customer details', error })
+    }
+}

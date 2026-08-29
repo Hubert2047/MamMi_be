@@ -9,6 +9,7 @@ import {
   getSalesByPaymentMethod,
   updateOrderPayment,
   updatePendingOrder,
+  updateOrderCustomer,
   printKitchenOrder
 } from "../controllers/order.js";
 import authenticateToken from "../middlewares/auth.js";
@@ -21,6 +22,7 @@ router.get("/next-order-number", authenticateToken, getNextOrderNumber);
 router.get("/sales-by-payment", authenticateToken, getSalesByPaymentMethod);
 router.put("/payment/:id", authenticateToken, updateOrderPayment);   
 router.put("/:id", authenticateToken, updatePendingOrder);
+router.put("/:id/customer", authenticateToken, updateOrderCustomer);
 router.post("/:id/print-kitchen", authenticateToken, printKitchenOrder);
 router.get("/:id", authenticateToken, getOrderById);
 router.patch("/:id/status", authenticateToken, updateOrderStatus);
