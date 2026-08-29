@@ -46,17 +46,16 @@ describe('order numbering', () => {
         expect(mocks.counterFindOne).toHaveBeenCalledWith({ storeId: 'store-a', periodId: 'open' })
     })
 
-    it('bootstraps from legacy numbers and retries an initial upsert race', async () => {
+    it('starts a new closing period at one and retries an initial upsert race', async () => {
         const duplicateKey = Object.assign(new Error('duplicate'), { code: 11000 })
         mocks.counterFindOne
             .mockReturnValueOnce({ select: () => ({ lean: async () => null }) })
             .mockReturnValueOnce({ select: () => ({ lean: async () => ({ sequence: 2 }) }) })
-        mocks.orderFindOne.mockReturnValue({ sort: () => ({ select: () => ({ lean: async () => ({ number: 1 }) }) }) })
         mocks.counterCreate.mockRejectedValueOnce(duplicateKey)
         mocks.counterFindOneAndUpdate.mockResolvedValueOnce({ sequence: 3 })
 
         await expect(allocateOrderSequence('store-a', 'closing-42')).resolves.toBe(3)
-        expect(mocks.counterCreate).toHaveBeenCalledWith({ storeId: 'store-a', periodId: 'closing-42', sequence: 2 })
+        expect(mocks.counterCreate).toHaveBeenCalledWith({ storeId: 'store-a', periodId: 'closing-42', sequence: 1 })
         expect(mocks.counterFindOneAndUpdate).toHaveBeenCalledTimes(1)
         expect(mocks.counterFindOneAndUpdate).toHaveBeenCalledWith(
             { storeId: 'store-a', periodId: 'closing-42' },

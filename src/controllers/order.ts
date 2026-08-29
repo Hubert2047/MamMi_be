@@ -195,6 +195,7 @@ export const createOrder = async (req: Request, res: Response) => {
             storeId,
             items: normalizedItems,
             totalPrice,
+            ...(order.pickupAt ? { pickupAt: new Date(order.pickupAt) } : {}),
             status: order.status,
             type: order.type,
             paymentMethod: order.paymentMethod,
@@ -410,7 +411,7 @@ export const updateOrderPayment = async (req: Request, res: Response) => {
 export const updatePendingOrder = async (req: Request, res: Response) => {
     try {
         const id = String(req.params.id)
-        const { items, type, table, selectedPromotionIds, expectedPricing, paymentMethod, version } = req.body
+        const { items, type, table, selectedPromotionIds, expectedPricing, paymentMethod, version, pickupAt } = req.body
         const storeId = (req as AuthRequest).user.storeId
 
         if (!Array.isArray(items) || items.length === 0) {
@@ -449,6 +450,7 @@ export const updatePendingOrder = async (req: Request, res: Response) => {
                     table: type === 'dine_in' ? String(table).trim() : '',
                     appliedPromotions: pricing.appliedPromotions,
                     paymentMethod,
+                    ...(pickupAt ? { pickupAt: new Date(pickupAt) } : {}),
                     totalPrice: pricing.total,
                 },
                 $inc: { version: 1 },
@@ -475,14 +477,15 @@ export const updateOrderCustomer = async (req: Request, res: Response) => {
 
         const name = typeof customer.name === 'string' ? customer.name.trim().slice(0, 120) : ''
         const phone = typeof customer.phone === 'string' ? customer.phone.trim().slice(0, 40) : ''
+        const pickupAt = typeof req.body?.pickupAt === 'string' && !Number.isNaN(Date.parse(req.body.pickupAt)) ? new Date(req.body.pickupAt) : undefined
         const updated = await Order.findOneAndUpdate(
             { _id: id, storeId, customer: { $ne: null } },
-            { $set: { 'customer.name': name, 'customer.phone': phone }, $inc: { version: 1 } },
+            { $set: { 'customer.name': name, 'customer.phone': phone, ...(pickupAt ? { pickupAt } : {}) }, $inc: { version: 1 } },
             { returnDocument: 'after', includeResultMetadata: false },
         )
         if (!updated) return res.status(404).json({ success: false, code: 'CUSTOMER_NOT_AVAILABLE', message: 'Customer details are not available for this order' })
 
-        emitStoreEvent(storeId, 'order.updated', { orderId: String(updated._id), changedFields: ['customer'] })
+        emitStoreEvent(storeId, 'order.updated', { orderId: String(updated._id), changedFields: ['customer', ...(pickupAt ? ['pickupAt'] : [])] })
         res.json({ success: true, data: updated })
     } catch (error) {
         console.error('Error updating order customer:', error)

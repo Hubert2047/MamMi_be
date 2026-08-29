@@ -4,6 +4,7 @@ import Order from '../models/order.js'
 import Revenue from '../models/revenue.js'
 import { calculateSystemAmount, getClosingPeriodFilter } from '../utils/dailyClosingCalculations.js'
 import Store from '../models/store.js'
+import mongoose from 'mongoose'
 
 export type SalesByPaymentSummary = Record<string, { totalSales: number; count: number }>
 
@@ -26,17 +27,18 @@ export async function getDailyClosingSummary(storeId: string, end = new Date()):
     const firstPeriodStart = store?.createdAt ?? end
     const periodStart = latestClosing?.periodEnd ?? firstPeriodStart
     const periodFilter = getClosingPeriodFilter(latestClosing?.periodEnd, firstPeriodStart, end)
+    const mongoStoreId = new mongoose.Types.ObjectId(storeId)
     const [salesResult, otherRevenueResult, expensesResult] = await Promise.all([
         Order.aggregate([
-            { $match: { storeId, paidAt: periodFilter, status: 'paid' } },
+            { $match: { storeId: mongoStoreId, paidAt: periodFilter, status: 'paid' } },
             { $group: { _id: '$paymentMethod', totalSales: { $sum: '$totalPrice' }, count: { $sum: 1 } } },
         ]),
         Revenue.aggregate([
-            { $match: { storeId, createdAt: periodFilter } },
+            { $match: { storeId: mongoStoreId, createdAt: periodFilter } },
             { $group: { _id: null, total: { $sum: '$price' } } },
         ]),
         Expense.aggregate([
-            { $match: { storeId, createdAt: periodFilter } },
+            { $match: { storeId: mongoStoreId, createdAt: periodFilter } },
             { $group: { _id: null, total: { $sum: '$price' } } },
         ]),
     ])

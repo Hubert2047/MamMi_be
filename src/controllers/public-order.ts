@@ -230,7 +230,8 @@ export const confirmGuestCart = async (req: Request, res: Response) => {
             if (!(await reserveOnlinePhoneOrderSlot(cart.storeId, phone))) throw new Error('ONLINE_ORDER_RATE_LIMITED')
         }
         const pricing = await calculateStorePromotionPricing(String(cart.storeId), items)
-        const order = await new Order({ storeId: cart.storeId, number: sequence, sequence, periodId, items, totalPrice: pricing.total, appliedPromotions: pricing.appliedPromotions, status: 'pending', type: cart.type || 'dine_in', table: cart.table || '', tableSessionId: cart.tableSessionId, paymentMethod: 'cash', customer, source }).save()
+        const pickupAt = typeof req.body?.pickupAt === 'string' && !Number.isNaN(Date.parse(req.body.pickupAt)) ? new Date(req.body.pickupAt) : new Date(Date.now() + 60 * 60 * 1000)
+        const order = await new Order({ storeId: cart.storeId, number: sequence, sequence, periodId, items, totalPrice: pricing.total, appliedPromotions: pricing.appliedPromotions, status: 'pending', type: cart.type || 'dine_in', table: cart.table || '', tableSessionId: cart.tableSessionId, paymentMethod: 'cash', customer, source, pickupAt }).save()
         await GuestCart.updateOne({ _id: cart._id }, { $set: { status: 'confirmed', orderId: order._id, expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) } })
         try { await createKitchenPrintJobs(order) } catch (error) { console.error('Failed to queue QR kitchen print jobs:', error) }
         emitStoreEvent(String(cart.storeId), 'order.created', { orderId: String(order._id), source })
