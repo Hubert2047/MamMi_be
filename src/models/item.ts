@@ -13,6 +13,7 @@ export interface IItem extends Document {
     optionGroups: OptionGroup[]
     categoryId: mongoose.Types.ObjectId
     addons: mongoose.Types.ObjectId[]
+    addonConfigs: Array<{ addonId: mongoose.Types.ObjectId; maxQuantity: number | null }>
     noteOptions: Array<LocalizedOption | string>
     components: Array<{ itemId: mongoose.Types.ObjectId; quantity: number }>
 }
@@ -45,6 +46,10 @@ const ItemSchema = new Schema<IItem>(
         variants: { type: [Schema.Types.Mixed], default: [] },
         optionGroups: { type: Schema.Types.Mixed, default: [] },
         addons: [{ type: Schema.Types.ObjectId, ref: 'Addon' }],
+        addonConfigs: [{
+            addonId: { type: Schema.Types.ObjectId, ref: 'Addon', required: true },
+            maxQuantity: { type: Number, min: 1, default: 1 },
+        }],
         categoryId: {
             type: Schema.Types.ObjectId,
             ref: 'Category',

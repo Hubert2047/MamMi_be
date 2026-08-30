@@ -99,7 +99,7 @@ export const getQrMenu = async (req: Request, res: Response) => {
         if (!session) return res.status(409).json({ success: false, code, message: 'Table ordering session is not active', table: { code: table.code, name: table.name } })
         const store = await Store.findOne({ _id: table.storeId, active: true }).select({ name: 1 }).lean()
         if (!store) return res.status(404).json({ success: false, code: 'STORE_NOT_AVAILABLE', message: 'Store is not available' })
-        const [items, promotions] = await Promise.all([getPublicMenu(String(table.storeId)), getPublicCatalogPromotions(String(table.storeId))])
+        const [items, promotions] = await Promise.all([getPublicMenu(String(table.storeId), 'qr'), getPublicCatalogPromotions(String(table.storeId))])
         const realtimeToken = publicRealtimeTokenForStore(String(table.storeId))
         res.json({ success: true, data: { store: { name: store.name }, table: { code: table.code, name: table.name }, items: applyPublicMenuPromotionDisplays(items, promotions), realtimeToken } })
     } catch (error) {
@@ -122,7 +122,7 @@ export const getOnlineMenu = async (_req: Request, res: Response) => {
     try {
         const store = await mainOnlineStore()
         if (!store) return res.status(404).json({ success: false, code: 'STORE_NOT_AVAILABLE', message: 'Main store is not available' })
-        const [items, promotions] = await Promise.all([getPublicMenu(String(store._id)), getPublicCatalogPromotions(String(store._id))])
+        const [items, promotions] = await Promise.all([getPublicMenu(String(store._id), 'online'), getPublicCatalogPromotions(String(store._id))])
         const realtimeToken = publicRealtimeTokenForStore(String(store._id))
         res.json({ success: true, data: { store: { name: store.name }, items: applyPublicMenuPromotionDisplays(items, promotions), realtimeToken } })
     } catch (error) {
@@ -172,7 +172,7 @@ export const previewGuestCart = async (req: Request, res: Response) => {
     const lines = Array.isArray(req.body?.lines) ? req.body.lines : cart.lines
     if (!Array.isArray(lines) || lines.some((line: any) => !line.itemId || !Number.isInteger(line.quantity) || line.quantity < 1 || line.quantity > 99 || !Array.isArray(line.noteOptions) || !Array.isArray(line.addonIds))) return res.status(400).json({ success: false, message: 'Invalid cart lines' })
     try {
-        const menu = await getPublicMenu(String(cart.storeId))
+        const menu = await getPublicMenu(String(cart.storeId), cart.source === 'online' ? 'online' : 'qr')
         const byId = new Map(menu.map((item: any) => [item.id, item]))
         const items = lines.map((line: any) => {
             const item: any = byId.get(line.itemId)
@@ -180,7 +180,7 @@ export const previewGuestCart = async (req: Request, res: Response) => {
             if (line.variant && !item.variants.some((option: any) => option.id === line.variant)) throw new Error('INVALID_OPTION')
             if (line.noteOptions.some((id: string) => !item.noteOptions.some((option: any) => option.id === id))) throw new Error('INVALID_OPTION')
             const addons = line.addonIds.map((id: string) => { const addon = item.addons.find((candidate: any) => candidate.id === id); if (!addon) throw new Error('ADDON_NOT_AVAILABLE'); return { id, name: addon.names.vi || addon.names.en || '', priceExtra: addon.priceExtra, amount: 1 } })
-            return { id: line.itemId, itemId: randomBytes(12).toString('hex'), name: item.names.vi || item.names.en || '', quantity: line.quantity, basePrice: item.price, variant: line.variant || '', addons, noteOptions: line.noteOptions, note: String(line.note || '').slice(0, 300), componentSelections: Array.isArray(line.componentSelections) ? line.componentSelections : [] }
+            return { id: line.itemId, itemId: randomBytes(12).toString('hex'), name: item.names.vi || item.names.en || '', quantity: line.quantity, basePrice: item.price, variant: line.variant || '', addons, addonDisplayMode: item.addonDisplayMode === 'merged' ? 'merged' : 'named', noteOptions: line.noteOptions, note: String(line.note || '').slice(0, 300), componentSelections: Array.isArray(line.componentSelections) ? line.componentSelections : [] }
         })
         const pricing = await calculateStorePromotionPricing(String(cart.storeId), items)
         const cartHash = createHash('sha256').update(JSON.stringify({ storeId: String(cart.storeId), lines })).digest('base64url')
@@ -207,7 +207,7 @@ export const confirmGuestCart = async (req: Request, res: Response) => {
     if (!cart) return res.status(409).json({ success: false, code: 'CART_LOCKED', message: 'Cart was already confirmed or is unavailable' })
     try {
         if (!cart.lines.length) throw new Error('Cart is empty')
-        const menu = await getPublicMenu(String(cart.storeId))
+        const menu = await getPublicMenu(String(cart.storeId), cart.source === 'online' ? 'online' : 'qr')
         const byId = new Map(menu.map((item: any) => [item.id, item]))
         const items = cart.lines.map((line) => {
             const item: any = byId.get(line.itemId)
@@ -215,7 +215,7 @@ export const confirmGuestCart = async (req: Request, res: Response) => {
             if (line.variant && !item.variants.some((option: any) => option.id === line.variant)) throw new Error('INVALID_OPTION')
             if (line.noteOptions.some((id) => !item.noteOptions.some((option: any) => option.id === id))) throw new Error('INVALID_OPTION')
             const addons = line.addonIds.map((id) => { const addon = item.addons.find((candidate: any) => candidate.id === id); if (!addon) throw new Error('ADDON_NOT_AVAILABLE'); return { id, name: addon.names.vi || addon.names.en || '', priceExtra: addon.priceExtra, amount: 1 } })
-            return { id: line.itemId, itemId: randomBytes(12).toString('hex'), name: item.names.vi || item.names.en || '', quantity: line.quantity, basePrice: item.price, variant: line.variant || '', addons, noteOptions: line.noteOptions, note: String(line.note || '').slice(0, 300), componentSelections: Array.isArray(line.componentSelections) ? line.componentSelections : [] }
+            return { id: line.itemId, itemId: randomBytes(12).toString('hex'), name: item.names.vi || item.names.en || '', quantity: line.quantity, basePrice: item.price, variant: line.variant || '', addons, addonDisplayMode: item.addonDisplayMode === 'merged' ? 'merged' : 'named', noteOptions: line.noteOptions, note: String(line.note || '').slice(0, 300), componentSelections: Array.isArray(line.componentSelections) ? line.componentSelections : [] }
         })
         const periodId = await getCurrentOrderPeriodId(String(cart.storeId)); const sequence = await allocateOrderSequence(String(cart.storeId), periodId)
         const source = cart.source || 'qr'

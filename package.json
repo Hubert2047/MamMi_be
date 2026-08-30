@@ -10,6 +10,7 @@
     "migrate:order-sequence": "tsx src/scripts/migrateOrderSequenceIndex.ts",
     "migrate:inventory-current-quantity": "tsx src/scripts/migrateInventoryCurrentQuantity.ts",
     "migrate:combo-support": "tsx src/scripts/migrateComboSupport.ts",
+    "migrate:store-item-sales-configuration": "tsx src/scripts/migrateStoreItemSalesConfiguration.ts",
     "test": "vitest run",
     "test:watch": "vitest"
   },

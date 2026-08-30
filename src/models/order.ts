@@ -16,6 +16,7 @@ interface OrderItem {
     basePrice: number
     variant: string
     addons: OrderItemAddon[]
+    addonDisplayMode?: 'named' | 'merged'
     noteOptions: string[]
     optionSelections?: { groupId: string; optionId: string; name?: string }[]
     note: string
@@ -102,6 +103,7 @@ const OrderItemSchema = new Schema<OrderItem>(
         basePrice: Number,
         variant: String,
         addons: [OrderItemAddonSchema],
+        addonDisplayMode: { type: String, enum: ['named', 'merged'] },
         noteOptions: [String],
         optionSelections: [{ groupId: String, optionId: String, name: String }],
         note: String,

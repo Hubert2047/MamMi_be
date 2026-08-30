@@ -19,7 +19,7 @@ function buildKitchenText(order: IOrder, item: IOrder['items'][number], index: n
         `${item.printName || item.name}${item.printVariant || item.variant ? `(${item.printVariant || item.variant})` : ''} x${item.quantity}`,
     ]
     if (item.printNoteOptions?.length || item.noteOptions?.length) lines.push(`不加: ${(item.printNoteOptions || item.noteOptions).join(', ')}`)
-    if (item.printAddons?.length || item.addons?.length) lines.push(`加點: ${(item.printAddons || item.addons).map((addon) => `${addon.printName || addon.name}${addon.amount > 1 ? ` x${addon.amount}` : ''}`).join(', ')}`)
+    if (item.addonDisplayMode !== 'merged' && (item.printAddons?.length || item.addons?.length)) lines.push(`加點: ${(item.printAddons || item.addons).map((addon) => `${addon.printName || addon.name}${addon.amount > 1 ? ` x${addon.amount}` : ''}`).join(', ')}`)
     if (item.note) lines.push(`備註: ${item.note}`)
     lines.push(`${index + 1}/${order.items.length}`)
     return lines.join('\n')

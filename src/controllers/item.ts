@@ -43,16 +43,28 @@ const normalizeOptionGroups = (groups: unknown): OptionGroup[] => (Array.isArray
     options: normalizeOptions(group?.options, `group-${index + 1}-option`),
 })).filter((group) => group.names.vi || group.names.en || group.names['zh-TW'])
 const normalizeComponents = (components: unknown) => (Array.isArray(components) ? components : []).map((component: any) => ({ itemId: component.itemId, quantity: Math.max(1, Number(component.quantity) || 1) }))
+const normalizeAddonConfigs = (addonIds: unknown, configs: unknown) => {
+    const ids = [...new Set((Array.isArray(addonIds) ? addonIds : []).map((addon: any) => String(typeof addon === 'string' ? addon : addon?.addonId || '')).filter((id) => mongoose.isValidObjectId(id)))]
+    const configByAddonId = new Map((Array.isArray(configs) ? configs : []).map((config: any) => {
+        const addonId = String(config?.addonId || '')
+        const maxQuantity = config?.maxQuantity === null ? null : Math.max(1, Math.floor(Number(config?.maxQuantity) || 1))
+        return [addonId, maxQuantity] as const
+    }))
+    return ids.map((addonId) => ({ addonId, maxQuantity: configByAddonId.has(addonId) ? configByAddonId.get(addonId)! : 1 }))
+}
 
 const toCatalogItem = (item: any, language: string) => ({
     ...item,
     type: item.type || 'product',
+    names: normalizeNames(item.names),
+    description: normalizeNames(item.description),
     variants: normalizeOptions(item.variants, 'variant'),
     noteOptions: normalizeOptions(item.noteOptions, 'note'),
     optionGroups: normalizeOptionGroups(item.optionGroups),
     name: item.names?.[language] || item.names?.vi || Object.values(item.names || {})[0] || '',
     categoryName: item.categoryId?.names?.[language] || item.categoryId?.names?.vi || item.categoryId?.name || '',
     categorySortOrder: Number.isFinite(item.categoryId?.sortOrder) ? item.categoryId.sortOrder : 0,
+    addons: (item.addons || []).map((addon: any) => { const config = (item.addonConfigs || []).find((entry: any) => String(entry.addonId) === String(addon._id)); return { ...addon, maxQuantity: config?.maxQuantity === null ? null : config?.maxQuantity ?? 1 } }),
 })
 
 const clearExpiredTemporaryAvailability = async (storeId: string) => {
@@ -86,11 +98,12 @@ export const createCatalogItem = async (req: Request, res: Response) => {
         const names = normalizeNames(req.body.names)
         if (!names) return res.status(400).json({ success: false, message: 'At least one product name is required' })
         const description = req.body.description === undefined ? undefined : normalizeNames(req.body.description)
-        const { price: _price, active: _active, ...data } = req.body
+        const { price: _price, active: _active, addonConfigs: _addonConfigs, ...data } = req.body
         if (data.imageUrl !== undefined && typeof data.imageUrl !== 'string') return res.status(400).json({ success: false, message: 'Image URL must be a string' })
         if (data.imagePublicId !== undefined && typeof data.imagePublicId !== 'string') return res.status(400).json({ success: false, message: 'Image public ID must be a string' })
         const type = req.body.type === 'combo' ? 'combo' : 'product'
-        const item = await Item.create({ ...data, type, addons: type === 'combo' ? [] : (Array.isArray(req.body.addons) ? req.body.addons : []), components: type === 'combo' ? normalizeComponents(req.body.components) : [], names, ...(description ? { description } : {}), variants: normalizeOptions(req.body.variants, 'variant'), optionGroups: normalizeOptionGroups(req.body.optionGroups), noteOptions: normalizeOptions(req.body.noteOptions, 'note') })
+        const addonConfigs = type === 'combo' ? [] : normalizeAddonConfigs(req.body.addons, req.body.addonConfigs)
+        const item = await Item.create({ ...data, type, addons: type === 'combo' ? [] : addonConfigs.map((config) => config.addonId), addonConfigs, components: type === 'combo' ? normalizeComponents(req.body.components) : [], names, ...(description ? { description } : {}), variants: normalizeOptions(req.body.variants, 'variant'), optionGroups: normalizeOptionGroups(req.body.optionGroups), noteOptions: normalizeOptions(req.body.noteOptions, 'note') })
         await emitCatalogEventToStores('catalog.item.updated', { itemId: String(item._id), changedFields: ['created'] })
         res.status(201).json({ success: true, data: item })
     } catch (error) { res.status(400).json({ success: false, message: 'Error creating catalog item', error }) }
@@ -102,11 +115,12 @@ export const updateCatalogItem = async (req: Request, res: Response) => {
         const names = req.body.names === undefined ? undefined : normalizeNames(req.body.names)
         if (req.body.names !== undefined && !names) return res.status(400).json({ success: false, message: 'At least one product name is required' })
         const description = req.body.description === undefined ? undefined : normalizeNames(req.body.description)
-        const { price: _price, active: _active, ...data } = req.body
+        const { price: _price, active: _active, addonConfigs: _addonConfigs, ...data } = req.body
         if (data.imageUrl !== undefined && typeof data.imageUrl !== 'string') return res.status(400).json({ success: false, message: 'Image URL must be a string' })
         if (data.imagePublicId !== undefined && typeof data.imagePublicId !== 'string') return res.status(400).json({ success: false, message: 'Image public ID must be a string' })
         const nextType = req.body.type === 'combo' ? 'combo' : req.body.type === 'product' ? 'product' : undefined
-        const update = { ...data, ...(nextType ? { type: nextType, ...(nextType === 'combo' ? { addons: [], components: normalizeComponents(req.body.components) } : {}) } : {}), ...(req.body.type !== 'combo' && req.body.components ? { components: normalizeComponents(req.body.components) } : {}), ...(nextType !== 'combo' && req.body.addons ? { addons: req.body.addons } : {}), ...(names ? { names } : {}), ...(description ? { description } : {}), ...(req.body.variants ? { variants: normalizeOptions(req.body.variants, 'variant') } : {}), ...(req.body.optionGroups ? { optionGroups: normalizeOptionGroups(req.body.optionGroups) } : {}), ...(req.body.noteOptions ? { noteOptions: normalizeOptions(req.body.noteOptions, 'note') } : {}) }
+        const addonConfigs = req.body.addons === undefined ? undefined : normalizeAddonConfigs(req.body.addons, req.body.addonConfigs)
+        const update = { ...data, ...(nextType ? { type: nextType, ...(nextType === 'combo' ? { addons: [], addonConfigs: [], components: normalizeComponents(req.body.components) } : {}) } : {}), ...(req.body.type !== 'combo' && req.body.components ? { components: normalizeComponents(req.body.components) } : {}), ...(nextType !== 'combo' && addonConfigs ? { addons: addonConfigs.map((config) => config.addonId), addonConfigs } : {}), ...(names ? { names } : {}), ...(description ? { description } : {}), ...(req.body.variants ? { variants: normalizeOptions(req.body.variants, 'variant') } : {}), ...(req.body.optionGroups ? { optionGroups: normalizeOptionGroups(req.body.optionGroups) } : {}), ...(req.body.noteOptions ? { noteOptions: normalizeOptions(req.body.noteOptions, 'note') } : {}) }
         const previous = await Item.findById(id).select({ imagePublicId: 1 }).lean()
         const item = await Item.findByIdAndUpdate(id, update, { returnDocument: 'after', runValidators: true })
         if (!item) return res.status(404).json({ success: false, message: 'Catalog item not found' })
@@ -134,7 +148,7 @@ export const addStoreItem = async (req: Request, res: Response) => {
         const storeId = (req as AuthRequest).user.storeId
         const { itemId, price = {} } = req.body
         if (!await Item.exists({ _id: itemId })) return res.status(404).json({ success: false, message: 'Catalog item not found' })
-        const storeItem = await StoreItem.findOneAndUpdate({ storeId, itemId }, { $set: { price }, $setOnInsert: { permanentlyActive: true, temporarilyUnavailable: false, temporarilyUnavailableUntil: null } }, { upsert: true, returnDocument: 'after', includeResultMetadata: false })
+        const storeItem = await StoreItem.findOneAndUpdate({ storeId, itemId }, { $set: { price }, $setOnInsert: { permanentlyActive: true, temporarilyUnavailable: false, temporarilyUnavailableUntil: null, visibility: { pos: true, qr: true, online: true }, addonDisplayMode: 'named' } }, { upsert: true, returnDocument: 'after', includeResultMetadata: false })
         emitStoreEvent(storeId, 'catalog.store-item.price.updated', { itemId: String(itemId), changedFields: ['price'] })
         res.status(201).json({ success: true, data: storeItem })
     } catch (error) { res.status(400).json({ success: false, message: 'Error adding store item', error }) }
@@ -152,6 +166,8 @@ export const updateStoreItem = async (req: Request, res: Response) => {
         const set: Record<string, unknown> = {}
         if (req.body.price !== undefined) set.price = req.body.price
         if (req.body.permanentlyActive !== undefined) set.permanentlyActive = Boolean(req.body.permanentlyActive)
+        if (req.body.visibility && typeof req.body.visibility === 'object') set.visibility = { pos: req.body.visibility.pos !== false, qr: req.body.visibility.qr !== false, online: req.body.visibility.online !== false }
+        if (req.body.addonDisplayMode !== undefined) set.addonDisplayMode = req.body.addonDisplayMode === 'merged' ? 'merged' : 'named'
         if (req.body.temporarilyUnavailable !== undefined) {
             const unavailable = Boolean(req.body.temporarilyUnavailable)
             set.temporarilyUnavailable = unavailable
@@ -194,6 +210,7 @@ export const getItems = async (req: Request, res: Response) => {
         if (available === 'true') {
             storeFilter.permanentlyActive = true
             storeFilter.temporarilyUnavailable = false
+            storeFilter['visibility.pos'] = { $ne: false }
         }
         const storeItems = await StoreItem.find(storeFilter).populate({
             path: 'itemId',
@@ -212,6 +229,8 @@ export const getItems = async (req: Request, res: Response) => {
             ...item,
             price: storeItem.price,
             permanentlyActive: storeItem.permanentlyActive !== false,
+            visibility: { pos: storeItem.visibility?.pos !== false, qr: storeItem.visibility?.qr !== false, online: storeItem.visibility?.online !== false },
+            addonDisplayMode: storeItem.addonDisplayMode === 'merged' ? 'merged' : 'named',
             temporarilyUnavailable: storeItem.temporarilyUnavailable === true,
             temporarilyUnavailableUntil: storeItem.temporarilyUnavailableUntil || null,
             variants: normalizeOptions(item.variants, 'variant'),
@@ -220,6 +239,7 @@ export const getItems = async (req: Request, res: Response) => {
             categoryName: item.categoryId?.names?.[language] || item.categoryId?.names?.vi || item.categoryId?.names?.en || item.categoryId?.names?.['zh-TW'] || item.categoryId?.name || '',
             addons: item.addons?.filter((addon: any) => storeAddonById.has(String(addon._id))).map((addon: any) => ({
                 ...addon,
+                maxQuantity: (() => { const config = (item.addonConfigs || []).find((entry: any) => String(entry.addonId) === String(addon._id)); return config?.maxQuantity === null ? null : config?.maxQuantity ?? 1 })(),
                 priceExtra: storeAddonById.get(String(addon._id)).priceExtra,
                 permanentlyActive: storeAddonById.get(String(addon._id)).permanentlyActive !== false,
                 temporarilyUnavailable: storeAddonById.get(String(addon._id)).temporarilyUnavailable === true,
@@ -246,7 +266,7 @@ export const removeSpecificAddons = async () => {
             (id) => new mongoose.Types.ObjectId(id),
         )
 
-        const result = await Item.updateMany({ addons: { $in: targetIds } }, { $pull: { addons: { $in: targetIds } } })
+        const result = await Item.updateMany({ addons: { $in: targetIds } }, { $pull: { addons: { $in: targetIds }, addonConfigs: { addonId: { $in: targetIds } } } })
 
         console.log('Addons removed from items:', result.modifiedCount)
     } catch (error) {

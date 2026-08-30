@@ -3,7 +3,6 @@ import Order from '../models/order.js'
 import StoreAddon from '../models/store-addon.js'
 import StoreItem from '../models/store-item.js'
 import Item from '../models/item.js'
-import Addon from '../models/addon.js'
 import mongoose from 'mongoose'
 import { getFromDayUntilNow, getFullDay } from '../utils/index.js'
 import { calculateTotal } from '../utils/orderCalculations.js'
@@ -104,7 +103,7 @@ export const createOrder = async (req: Request, res: Response) => {
         const validItemIds = itemIds.filter((id) => mongoose.isValidObjectId(id))
         if (validItemIds.length !== itemIds.length) return res.status(400).json({ success: false, code: 'ITEM_NOT_AVAILABLE', message: 'One or more selected products are no longer available' })
         await StoreItem.updateMany({ storeId, temporarilyUnavailable: true, temporarilyUnavailableUntil: { $lte: new Date() } }, { $set: { temporarilyUnavailable: false }, $unset: { temporarilyUnavailableUntil: 1 } })
-        const availableItems = await StoreItem.countDocuments({ storeId, itemId: { $in: validItemIds }, permanentlyActive: { $ne: false }, temporarilyUnavailable: false })
+        const availableItems = await StoreItem.countDocuments({ storeId, itemId: { $in: validItemIds }, permanentlyActive: { $ne: false }, temporarilyUnavailable: false, 'visibility.pos': { $ne: false } })
         if (availableItems !== validItemIds.length) return res.status(400).json({ success: false, code: 'ITEM_NOT_AVAILABLE', message: 'One or more selected products are no longer available' })
 
         if (order.checkoutPending && order._id) {
@@ -129,12 +128,13 @@ export const createOrder = async (req: Request, res: Response) => {
             const availableAddons = await StoreAddon.countDocuments({ storeId, addonId: { $in: validAddonIds }, permanentlyActive: { $ne: false }, temporarilyUnavailable: false })
             if (availableAddons !== validAddonIds.length) return res.status(400).json({ success: false, code: 'ADDON_NOT_AVAILABLE', message: 'One or more selected add-ons are no longer available' })
         }
+        if (order.items.some((item: any) => { const ids = (item.addons || []).map((addon: any) => String(addon.id)); return new Set(ids).size !== ids.length })) {
+            return res.status(400).json({ success: false, code: 'ADDON_QUANTITY_INVALID', message: 'An add-on can only be selected once per item' })
+        }
 
-        const addonCatalog = validAddonIds.length
-            ? await Addon.find({ _id: { $in: validAddonIds } }).select('names name').lean()
-            : []
-        const addonById = new Map(addonCatalog.map((addon: any) => [String(addon._id), addon]))
-        const catalogItems = await Item.find({ _id: { $in: validItemIds } }).select('names variants noteOptions optionGroups addons').populate('addons', 'names name').lean()
+        const storeItemConfigs = await StoreItem.find({ storeId, itemId: { $in: validItemIds } }).select({ itemId: 1, addonDisplayMode: 1 }).lean()
+        const storeItemConfigById = new Map(storeItemConfigs.map((entry: any) => [String(entry.itemId), entry]))
+        const catalogItems = await Item.find({ _id: { $in: validItemIds } }).select('names variants noteOptions optionGroups addons addonConfigs').populate('addons', 'names name').lean()
         const catalogById = new Map(catalogItems.map((catalogItem: any) => [String(catalogItem._id), catalogItem]))
         const chineseName = (value: any) => value?.names?.['zh-TW'] || value?.names?.vi || value?.names?.en || value?.name || ''
         const optionName = (option: any) => {
@@ -147,8 +147,12 @@ export const createOrder = async (req: Request, res: Response) => {
             const selectedVariant = catalogItem?.variants?.find((option: any) => option?.id === item.variant) || item.variant
             const selectedNoteOptions = (item.noteOptions || []).map((selectedOption: any) => catalogItem?.noteOptions?.find((option: any) => option?.id === selectedOption) || selectedOption)
             const selectedAddons = (item.addons || []).map((addon: any) => {
-                const catalogAddon = addonById.get(String(addon.id)) || catalogItem?.addons?.find((candidate: any) => String(candidate?._id) === String(addon.id))
-                return { ...addon, printName: chineseName(catalogAddon) || addon.name }
+                const catalogAddon = catalogItem?.addons?.find((candidate: any) => String(candidate?._id) === String(addon.id))
+                const config = (catalogItem?.addonConfigs || []).find((entry: any) => String(entry.addonId) === String(addon.id))
+                const maxQuantity = config?.maxQuantity === null ? null : config?.maxQuantity ?? 1
+                const amount = Math.max(1, Math.floor(Number(addon.amount) || 1))
+                if (!catalogAddon || (maxQuantity !== null && amount > maxQuantity)) throw new Error('ADDON_QUANTITY_INVALID')
+                return { ...addon, amount, printName: chineseName(catalogAddon) || addon.name }
             })
             const printNoteOptions = selectedNoteOptions.map((selectedOption: any) => optionName(selectedOption))
             const requestedSelections = Array.isArray(item.optionSelections) ? item.optionSelections : []
@@ -170,6 +174,7 @@ export const createOrder = async (req: Request, res: Response) => {
                 basePrice: item.basePrice,
                 variant: optionName(selectedVariant),
                 addons: selectedAddons,
+                addonDisplayMode: storeItemConfigById.get(String(item.id))?.addonDisplayMode === 'merged' ? 'merged' : 'named',
                 noteOptions: printNoteOptions,
                 note: item.note,
                 printName: chineseName(catalogItem) || item.name,
@@ -425,7 +430,7 @@ export const updatePendingOrder = async (req: Request, res: Response) => {
         const validItemIds = itemIds.filter((itemId) => mongoose.isValidObjectId(itemId))
         if (validItemIds.length !== itemIds.length) return res.status(400).json({ success: false, code: 'ITEM_NOT_AVAILABLE', message: 'One or more selected products are no longer available' })
         await StoreItem.updateMany({ storeId, temporarilyUnavailable: true, temporarilyUnavailableUntil: { $lte: new Date() } }, { $set: { temporarilyUnavailable: false }, $unset: { temporarilyUnavailableUntil: 1 } })
-        const availableItems = await StoreItem.countDocuments({ storeId, itemId: { $in: validItemIds }, permanentlyActive: { $ne: false }, temporarilyUnavailable: false })
+        const availableItems = await StoreItem.countDocuments({ storeId, itemId: { $in: validItemIds }, permanentlyActive: { $ne: false }, temporarilyUnavailable: false, 'visibility.pos': { $ne: false } })
         if (availableItems !== validItemIds.length) return res.status(400).json({ success: false, code: 'ITEM_NOT_AVAILABLE', message: 'One or more selected products are no longer available' })
 
         const addonIds = [...new Set<string>(items.flatMap((item: any) => Array.isArray(item.addons) ? item.addons.map((addon: any) => String(addon.id)) : []))]
@@ -435,6 +440,22 @@ export const updatePendingOrder = async (req: Request, res: Response) => {
             await StoreAddon.updateMany({ storeId, temporarilyUnavailable: true, temporarilyUnavailableUntil: { $lte: new Date() } }, { $set: { temporarilyUnavailable: false }, $unset: { temporarilyUnavailableUntil: 1 } })
             const availableAddons = await StoreAddon.countDocuments({ storeId, addonId: { $in: validAddonIds }, permanentlyActive: { $ne: false }, temporarilyUnavailable: false })
             if (availableAddons !== validAddonIds.length) return res.status(400).json({ success: false, code: 'ADDON_NOT_AVAILABLE', message: 'One or more selected add-ons are no longer available' })
+        }
+
+        const catalogItems = await Item.find({ _id: { $in: validItemIds } }).select('addons addonConfigs').populate('addons', '_id').lean()
+        const catalogById = new Map(catalogItems.map((catalogItem: any) => [String(catalogItem._id), catalogItem]))
+        for (const item of items) {
+            const catalogItem = catalogById.get(String(item.id))
+            const selectedAddonIds = (item.addons || []).map((addon: any) => String(addon.id))
+            if (new Set(selectedAddonIds).size !== selectedAddonIds.length) return res.status(400).json({ success: false, code: 'ADDON_QUANTITY_INVALID', message: 'An add-on can only be selected once per item' })
+            for (const addon of item.addons || []) {
+                const addonId = String(addon.id)
+                const availableOnItem = catalogItem?.addons?.some((candidate: any) => String(candidate._id) === addonId)
+                const config = (catalogItem?.addonConfigs || []).find((entry: any) => String(entry.addonId) === addonId)
+                const maxQuantity = config?.maxQuantity === null ? null : config?.maxQuantity ?? 1
+                const amount = Math.max(1, Math.floor(Number(addon.amount) || 1))
+                if (!availableOnItem || (maxQuantity !== null && amount > maxQuantity)) return res.status(400).json({ success: false, code: 'ADDON_QUANTITY_INVALID', message: 'An add-on quantity exceeds its product limit' })
+            }
         }
 
         const selectedIds = Array.isArray(selectedPromotionIds) ? selectedPromotionIds.map(String) : []

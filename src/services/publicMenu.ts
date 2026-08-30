@@ -23,9 +23,9 @@ async function clearExpiredAvailability(storeId: string) {
     ])
 }
 
-export async function getPublicMenu(storeId: string) {
+export async function getPublicMenu(storeId: string, channel: 'qr' | 'online' = 'qr') {
     await clearExpiredAvailability(storeId)
-    const storeItems = await StoreItem.find({ storeId, permanentlyActive: true, temporarilyUnavailable: false }).populate({
+    const storeItems = await StoreItem.find({ storeId, permanentlyActive: true, temporarilyUnavailable: false, [`visibility.${channel}`]: { $ne: false } }).populate({
         path: 'itemId',
         populate: [
             { path: 'categoryId', select: 'names name sortOrder' },
@@ -63,13 +63,15 @@ export async function getPublicMenu(storeId: string) {
             new: item.new === true,
             category: { id: String(category?._id || ''), names: normalizeNames(category?.names || { vi: category?.name || '' }), sortOrder: Number.isFinite(category?.sortOrder) ? category.sortOrder : 0 },
             price: basePrice,
+            addonDisplayMode: storeItem.addonDisplayMode === 'merged' ? 'merged' : 'named',
             variants: normalizeOptions(item.variants, 'variant'),
             noteOptions: normalizeOptions(item.noteOptions, 'note'),
             type: item.type || 'product',
             components: (item.components || []).map((component: any, index: number) => ({ componentId: `${component.itemId?._id || component.itemId}-${index}`, itemId: String(component.itemId?._id || component.itemId), quantity: Number(component.quantity) || 1, names: normalizeNames(component.itemId?.names), noteOptions: normalizeOptions(component.itemId?.noteOptions, 'note') })),
             addons: (item.addons || []).flatMap((addon: any) => {
                 const storeAddon = storeAddonById.get(String(addon._id))
-                return storeAddon ? [{ id: String(addon._id), names: normalizeNames(addon.names || { vi: addon.name || '' }), priceExtra: Number(storeAddon.priceExtra) }] : []
+                const config = (item.addonConfigs || []).find((entry: any) => String(entry.addonId) === String(addon._id))
+                return storeAddon ? [{ id: String(addon._id), names: normalizeNames(addon.names || { vi: addon.name || '' }), priceExtra: Number(storeAddon.priceExtra), maxQuantity: config?.maxQuantity === null ? null : config?.maxQuantity ?? 1 }] : []
             }),
         }]
     })
