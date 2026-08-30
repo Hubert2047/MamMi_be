@@ -11,8 +11,11 @@ export interface IPrinter extends Document {
     active: boolean
     printerDpi: number
     labelWidthMm: number
-    labelHeightMm: number
-    labelGapMm: number
+    labelHeightMm?: number
+    labelGapMm?: number
+    cutEnabled: boolean
+    cutFeedHex?: string
+    cutCommandHex?: string
 }
 
 const PrinterSchema = new Schema<IPrinter>({
@@ -24,8 +27,11 @@ const PrinterSchema = new Schema<IPrinter>({
     active: { type: Boolean, default: true, required: true },
     printerDpi: { type: Number, default: 203, required: true },
     labelWidthMm: { type: Number, default: 58, required: true },
-    labelHeightMm: { type: Number, default: 40, required: true },
-    labelGapMm: { type: Number, default: 2, required: true },
+    labelHeightMm: { type: Number },
+    labelGapMm: { type: Number },
+    cutEnabled: { type: Boolean, default: false, required: true },
+    cutFeedHex: { type: String },
+    cutCommandHex: { type: String },
 }, { timestamps: true })
 
 PrinterSchema.index({ storeId: 1, agentId: 1, name: 1 }, { unique: true })

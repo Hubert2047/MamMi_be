@@ -7,6 +7,15 @@ import PrintJob from '../models/print-job.js'
 import type { AuthRequest } from '../middlewares/auth.js'
 const hash = (x: string) => createHash('sha256').update(x).digest('hex')
 const storeId = (req: Request) => (req as AuthRequest).user.storeId
+const normalizeHex = (value: unknown) => {
+  const hex = String(value ?? '').trim()
+  if (!/^(?:[0-9a-f]{2})+$/i.test(hex)) throw new Error('Print command must be an even-length hexadecimal string')
+  return hex.toUpperCase()
+}
+const receiptCutSettings = (input: any, profile: string, current: any = {}) => {
+  if (profile !== 'receipt-escpos' || input?.cutEnabled !== true) return { cutEnabled: false }
+  return { cutEnabled: true, cutFeedHex: normalizeHex(input.cutFeedHex ?? current.cutFeedHex), cutCommandHex: normalizeHex(input.cutCommandHex ?? current.cutCommandHex) }
+}
 const agentPublic = (a: any, printers: any[] = []) => ({ _id: a._id, name: a.name, agentId: a.agentId, tokenPrefix: a.tokenPrefix, active: a.active, lastSeenAt: a.lastSeenAt, printers })
 export const listPrintAgents = async (req: Request, res: Response) => {
   const sid = storeId(req); const [agents, printers, routing] = await Promise.all([PrintAgent.find({ storeId: sid }).lean(), Printer.find({ storeId: sid }).lean(), PrintRouting.findOne({ storeId: sid }).lean()])
@@ -22,8 +31,11 @@ export const createPrinter = async (req: Request, res: Response) => {
   const sid = storeId(req); const agent = await PrintAgent.findOne({ _id: String(req.params.id), storeId: sid }); if (!agent) return res.status(404).json({ message: 'Agent not found' })
   const { name, windowsPrinterName, profile = 'kitchen-label-tspl', printerDpi = 203, labelWidthMm = 58, labelHeightMm = 40, labelGapMm = 2 } = req.body || {}
   if (!name || !windowsPrinterName) return res.status(400).json({ message: 'Printer name is required' })
-  const printer = await Printer.create({ storeId: sid, agentId: agent._id, name, windowsPrinterName, profile, printerDpi, labelWidthMm, labelHeightMm, labelGapMm })
-  res.status(201).json({ success: true, data: printer })
+  try {
+    const labelSettings = profile === 'receipt-escpos' ? {} : { labelHeightMm, labelGapMm }
+    const printer = await Printer.create({ storeId: sid, agentId: agent._id, name, windowsPrinterName, profile, printerDpi, labelWidthMm, ...labelSettings, ...receiptCutSettings(req.body, profile) })
+    return res.status(201).json({ success: true, data: printer })
+  } catch (error) { return res.status(400).json({ message: error instanceof Error ? error.message : 'Invalid printer settings' }) }
 }
 export const updatePrintAgent = async (req: Request, res: Response) => {
   const agent = await PrintAgent.findOneAndUpdate({ _id: String(req.params.id), storeId: storeId(req) }, { $set: { ...(req.body?.name !== undefined ? { name: String(req.body.name).trim() } : {}), ...(req.body?.active !== undefined ? { active: Boolean(req.body.active) } : {}) } }, { returnDocument: 'after' }).lean()
@@ -33,10 +45,22 @@ export const updatePrintAgent = async (req: Request, res: Response) => {
 export const updatePrinter = async (req: Request, res: Response) => {
   const printer = await Printer.findOne({ _id: String(req.params.printerId), storeId: storeId(req), agentId: String(req.params.id) })
   if (!printer) return res.status(404).json({ message: 'Printer not found' })
-  const allowed = ['name', 'windowsPrinterName', 'profile', 'printerDpi', 'labelWidthMm', 'labelHeightMm', 'labelGapMm', 'active']
+  const allowed = ['name', 'windowsPrinterName', 'profile', 'printerDpi', 'labelWidthMm', 'labelHeightMm', 'labelGapMm', 'cutEnabled', 'cutFeedHex', 'cutCommandHex', 'active']
   for (const key of allowed) if (req.body?.[key] !== undefined) (printer as any)[key] = req.body[key]
-  await printer.save()
-  res.json({ success: true, data: printer })
+  try {
+    if (printer.profile === 'receipt-escpos') {
+      printer.set('labelHeightMm', undefined)
+      printer.set('labelGapMm', undefined)
+    }
+    const cutSettings = receiptCutSettings(req.body?.cutEnabled === undefined ? { ...req.body, cutEnabled: printer.cutEnabled } : req.body, printer.profile, printer)
+    Object.assign(printer, cutSettings)
+    if (!cutSettings.cutEnabled) {
+      printer.set('cutFeedHex', undefined)
+      printer.set('cutCommandHex', undefined)
+    }
+    await printer.save()
+    return res.json({ success: true, data: printer })
+  } catch (error) { return res.status(400).json({ message: error instanceof Error ? error.message : 'Invalid printer settings' }) }
 }
 export const createPrinterTestJob = async (req: Request, res: Response) => {
   const sid = storeId(req)
