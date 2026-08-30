@@ -68,7 +68,12 @@ export const createPrinterTestJob = async (req: Request, res: Response) => {
   if (!printer) return res.status(404).json({ message: 'Active printer not found' })
   const agent = await PrintAgent.findOne({ _id: printer.agentId, storeId: sid, active: true })
   if (!agent) return res.status(409).json({ message: 'Print agent is inactive' })
-  const job = await PrintJob.create({ storeId: sid, printerId: printer._id, kind: 'test', payload: { printableText: '列印測試\n印表機連線正常' }, retentionUntil: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) })
+  const printableText = String(req.body?.printableText ?? '列印測試\n印表機連線正常').trim()
+  if (!printableText) return res.status(400).json({ message: 'Test print text is required' })
+  const fontSize = Math.min(48, Math.max(8, Number(req.body?.fontSize) || 40))
+  const bold = req.body?.bold === true
+  const copies = Math.min(50, Math.max(1, Number(req.body?.copies) || 1))
+  const job = await PrintJob.create({ storeId: sid, printerId: printer._id, kind: 'test', payload: { printableText, fontSize, bold, copies }, retentionUntil: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) })
   res.status(201).json({ success: true, data: job })
 }
 export const updatePrintRouting = async (req: Request, res: Response) => {

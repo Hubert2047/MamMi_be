@@ -96,7 +96,7 @@ export const getQrMenu = async (req: Request, res: Response) => {
     try {
         const { table, session, code } = await getQrContext(String(req.params.token))
         if (!table) return res.status(404).json({ success: false, code, message: 'QR code is not active' })
-        if (!session) return res.status(409).json({ success: false, code, message: 'Table ordering session is not active' })
+        if (!session) return res.status(409).json({ success: false, code, message: 'Table ordering session is not active', table: { code: table.code, name: table.name } })
         const store = await Store.findOne({ _id: table.storeId, active: true }).select({ name: 1 }).lean()
         if (!store) return res.status(404).json({ success: false, code: 'STORE_NOT_AVAILABLE', message: 'Store is not available' })
         const [items, promotions] = await Promise.all([getPublicMenu(String(table.storeId)), getPublicCatalogPromotions(String(table.storeId))])

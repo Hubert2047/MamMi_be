@@ -9,7 +9,7 @@ export interface IPrintJob extends Document {
     orderId?: mongoose.Types.ObjectId
     kind: PrintJobKind
     status: PrintJobStatus
-    payload: { printableText: string }
+    payload: { printableText: string; fontSize?: number; bold?: boolean; copies?: number }
     attempts: number
     agentId?: string
     lockedAt?: Date
