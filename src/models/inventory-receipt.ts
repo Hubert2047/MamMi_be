@@ -18,6 +18,7 @@ export interface IInventoryReceipt extends Document {
     expenseId?: mongoose.Types.ObjectId
     note?: string
     lines: IInventoryReceiptLine[]
+    inventoryStatus: 'pending' | 'posted'
 }
 
 const ReceiptLineSchema = new Schema<IInventoryReceiptLine>({
@@ -38,6 +39,7 @@ const InventoryReceiptSchema = new Schema<IInventoryReceipt>({
     expenseId: { type: Schema.Types.ObjectId, ref: 'Expense' },
     note: String,
     lines: { type: [ReceiptLineSchema], required: true, validate: (value: unknown[]) => value.length > 0 },
+    inventoryStatus: { type: String, enum: ['pending', 'posted'], default: 'posted', required: true },
 }, { timestamps: true })
 
 InventoryReceiptSchema.index({ storeId: 1, receivedAt: -1 })

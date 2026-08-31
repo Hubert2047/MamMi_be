@@ -7,8 +7,8 @@ import { assertFinancialPeriodOpen, FinancialPeriodClosedError } from '../servic
 import type { AuthRequest } from '../middlewares/auth.js'
 export const createRevenue = async (req: Request, res: Response) => {
     try {
-        const { name, price, note } = req.body
-        const revenue = new Revenue({ storeId: (req as AuthRequest).user.storeId, name, price, note })
+        const { name, price, note, paymentMethod = 'cash' } = req.body
+        const revenue = new Revenue({ storeId: (req as AuthRequest).user.storeId, name, price, note, paymentMethod })
         await revenue.save()
         res.status(201).json({ success: true, data: revenue })
     } catch (error) {

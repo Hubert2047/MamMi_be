@@ -8,13 +8,13 @@ import { assertFinancialPeriodOpen, FinancialPeriodClosedError } from '../servic
 import type { AuthRequest } from '../middlewares/auth.js'
 export const createExpense = async (req: Request, res: Response) => {
     try {
-        const { name, quantity = 1, unit = '', unitPrice, price, note, category = 'other' } = req.body
+        const { name, quantity = 1, unit = '', unitPrice, price, note, category = 'other', paymentMethod = 'cash' } = req.body
         const normalizedQuantity = Number(quantity)
         const normalizedUnitPrice = Number(unitPrice ?? price)
         if (!name || !Number.isFinite(normalizedQuantity) || normalizedQuantity <= 0 || !Number.isFinite(normalizedUnitPrice) || normalizedUnitPrice < 0) {
             return res.status(400).json({ success: false, message: 'Invalid expense quantity or price' })
         }
-        const expense = new Expense({ storeId: (req as AuthRequest).user.storeId, name, quantity: normalizedQuantity, unit, unitPrice: normalizedUnitPrice, price: normalizedQuantity * normalizedUnitPrice, note, category, type: 'other' })
+        const expense = new Expense({ storeId: (req as AuthRequest).user.storeId, name, quantity: normalizedQuantity, unit, unitPrice: normalizedUnitPrice, price: normalizedQuantity * normalizedUnitPrice, note, category, paymentMethod, type: 'other' })
         await expense.save()
         res.status(201).json({ success: true, data: expense })
     } catch (error) {

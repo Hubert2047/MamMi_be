@@ -34,11 +34,11 @@ export async function getDailyClosingSummary(storeId: string, end = new Date()):
             { $group: { _id: '$paymentMethod', totalSales: { $sum: '$totalPrice' }, count: { $sum: 1 } } },
         ]),
         Revenue.aggregate([
-            { $match: { storeId: mongoStoreId, createdAt: periodFilter } },
+            { $match: { storeId: mongoStoreId, createdAt: periodFilter, $or: [{ paymentMethod: 'cash' }, { paymentMethod: { $exists: false } }] } },
             { $group: { _id: null, total: { $sum: '$price' } } },
         ]),
         Expense.aggregate([
-            { $match: { storeId: mongoStoreId, createdAt: periodFilter } },
+            { $match: { storeId: mongoStoreId, createdAt: periodFilter, $or: [{ paymentMethod: 'cash' }, { paymentMethod: { $exists: false } }] } },
             { $group: { _id: null, total: { $sum: '$price' } } },
         ]),
     ])

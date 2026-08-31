@@ -12,6 +12,7 @@ export interface IInventoryItem extends Document {
     minimumStock: number
     active: boolean
     note?: string
+    inventoryStatus: 'pending' | 'active'
 }
 
 const InventoryItemSchema = new Schema<IInventoryItem>({
@@ -24,6 +25,7 @@ const InventoryItemSchema = new Schema<IInventoryItem>({
     minimumStock: { type: Number, default: 0, min: 0 },
     active: { type: Boolean, default: true },
     note: String,
+    inventoryStatus: { type: String, enum: ['pending', 'active'], default: 'active', required: true },
 }, { timestamps: true })
 
 InventoryItemSchema.index({ storeId: 1, name: 1 }, { unique: true })

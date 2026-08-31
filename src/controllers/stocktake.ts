@@ -5,7 +5,7 @@ import type { AuthRequest } from '../middlewares/auth.js'
 
 export const getInventoryStock = async (req: Request, res: Response) => {
     const storeId = (req as AuthRequest).user.storeId
-    const items = await InventoryItem.find({ storeId, active: true }).sort({ name: 1 }).lean()
+    const items = await InventoryItem.find({ storeId, active: true, inventoryStatus: { $ne: 'pending' } }).sort({ name: 1 }).lean()
     res.json({ success: true, data: items })
 }
 
@@ -22,7 +22,7 @@ export const createInventoryStocktake = async (req: Request, res: Response) => {
         if (!Array.isArray(lines) || !lines.length) return res.status(400).json({ success: false, message: 'At least one stocktake line is required' })
         const stocktakeDate = checkedAt ? new Date(checkedAt) : new Date()
         if (Number.isNaN(stocktakeDate.getTime())) return res.status(400).json({ success: false, message: 'Invalid stocktake date' })
-        const items = await InventoryItem.find({ _id: { $in: lines.map((line: any) => line.inventoryItemId) }, storeId, active: true }).lean()
+        const items = await InventoryItem.find({ _id: { $in: lines.map((line: any) => line.inventoryItemId) }, storeId, active: true, inventoryStatus: { $ne: 'pending' } }).lean()
         const itemMap = new Map(items.map((item) => [String(item._id), item]))
         const normalized = lines.map((line: any) => {
             const item = itemMap.get(String(line.inventoryItemId))

@@ -11,6 +11,7 @@ export interface IExpense extends Document {
   type: 'other' | 'inventory_purchase';
   receiptId?: mongoose.Types.ObjectId;
   category?: string;
+  paymentMethod: 'cash' | 'bank_transfer' | 'other';
   createdAt: Date;
   updatedAt: Date;
 }
@@ -26,6 +27,7 @@ const ExpenseSchema = new Schema<IExpense>({
   type: { type: String, enum: ['other', 'inventory_purchase'], default: 'other' },
   receiptId: { type: Schema.Types.ObjectId, ref: 'InventoryReceipt' },
   category: { type: String, default: 'other' },
+  paymentMethod: { type: String, enum: ['cash', 'bank_transfer', 'other'], default: 'cash' },
 }, { timestamps: true });
 
 ExpenseSchema.index({ storeId: 1, createdAt: 1 });

@@ -19,8 +19,8 @@ export const getUnits = async (_req: Request, res: Response) => {
 
 export const createUnit = async (req: Request, res: Response) => {
     try {
-        const { code, names, category, baseUnit, conversionFactor = 1 } = req.body
-        const unit = await Unit.create({ code, names, category, baseUnit, conversionFactor, active: true })
+        const { code, names, category } = req.body
+        const unit = await Unit.create({ code, names, category, active: true })
         await emitCatalogEventToStores('inventory.unit.updated', { unitId: String(unit._id), changedFields: ['created'] })
         return res.status(201).json({ success: true, data: unit })
     } catch (error: any) {
@@ -29,8 +29,8 @@ export const createUnit = async (req: Request, res: Response) => {
 }
 
 export const updateUnit = async (req: Request, res: Response) => {
-    const { code, names, category, baseUnit, conversionFactor, active } = req.body
-    const unit = await Unit.findByIdAndUpdate(req.params.id, { $set: { code, names, category, baseUnit, conversionFactor, active } }, { new: true, runValidators: true })
+    const { code, names, category, active } = req.body
+    const unit = await Unit.findByIdAndUpdate(req.params.id, { $set: { code, names, category, active } }, { new: true, runValidators: true })
     if (!unit) return res.status(404).json({ success: false, message: 'Unit not found' })
     await emitCatalogEventToStores('inventory.unit.updated', { unitId: String(unit._id), changedFields: ['updated'] })
     return res.json({ success: true, data: unit })

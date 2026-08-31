@@ -10,7 +10,7 @@ import { emitStoreEvent } from '../realtime.js'
 
 type ReceiptInputLine = { inventoryItemId: string; quantity: number; unitCode: string; unitPrice: number }
 
-async function normalizeReceiptLines(storeId: string, lines: ReceiptInputLine[]) {
+async function normalizeReceiptLines(storeId: string, lines: ReceiptInputLine[], allowPendingUnitFallback = false) {
     if (!Array.isArray(lines) || !lines.length) throw new Error('At least one receipt line is required')
     const itemIds = lines.map((line) => line.inventoryItemId)
     const items = await InventoryItem.find({ _id: { $in: itemIds }, storeId, active: true }).lean()
@@ -21,9 +21,12 @@ async function normalizeReceiptLines(storeId: string, lines: ReceiptInputLine[])
         const quantity = Number(line.quantity)
         const unitPrice = Number(line.unitPrice)
         const purchaseUnit = item.purchaseUnits.find((unit) => unit.unitCode === line.unitCode)
+        const pendingUnitFallback = allowPendingUnitFallback && !purchaseUnit
+        const resolvedUnitCode = pendingUnitFallback ? item.stockUnitCode : line.unitCode
         const conversionFactor = purchaseUnit?.conversionFactor ?? 0
-        if (!Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(unitPrice) || unitPrice < 0 || conversionFactor <= 0) throw new Error('Invalid receipt line')
-        return { inventoryItemId: item._id, quantity, unitCode: line.unitCode, conversionFactor, stockQuantity: quantity * conversionFactor, unitPrice, total: quantity * unitPrice }
+        const resolvedConversionFactor = pendingUnitFallback ? 1 : conversionFactor
+        if (!Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(unitPrice) || unitPrice < 0 || resolvedConversionFactor <= 0) throw new Error('Invalid receipt line')
+        return { inventoryItemId: item._id, quantity, unitCode: resolvedUnitCode, conversionFactor: resolvedConversionFactor, stockQuantity: quantity * resolvedConversionFactor, unitPrice, total: quantity * unitPrice }
     })
     return { normalized, itemMap }
 }
@@ -47,9 +50,9 @@ export const getInventoryItems = async (req: Request, res: Response) => {
 export const createInventoryItem = async (req: Request, res: Response) => {
     try {
         const storeId = (req as AuthRequest).user.storeId
-        const { name, stockUnitCode, purchaseUnits = [], minimumStock = 0, note } = req.body
+        const { name, stockUnitCode, purchaseUnits = [], minimumStock = 0, note, inventoryStatus = 'active' } = req.body
         if (!name || !stockUnitCode) return res.status(400).json({ success: false, message: 'Name and stock unit are required' })
-        const item = await InventoryItem.create({ storeId, name, stockUnitCode, purchaseUnits, minimumStock, note })
+        const item = await InventoryItem.create({ storeId, name, stockUnitCode, purchaseUnits, minimumStock, note, inventoryStatus })
         emitStoreEvent(String(storeId), 'inventory.item.updated', { inventoryItemId: String(item._id), changedFields: ['created'] })
         return res.status(201).json({ success: true, data: item })
     } catch (error: any) {
@@ -61,18 +64,19 @@ export const createInventoryItem = async (req: Request, res: Response) => {
 export const updateInventoryItem = async (req: Request, res: Response) => {
     try {
         const storeId = (req as AuthRequest).user.storeId
-        const { name, stockUnitCode, purchaseUnits, minimumStock, note, active } = req.body
+        const { name, stockUnitCode, purchaseUnits, minimumStock, note, active, inventoryStatus } = req.body
         const current = await InventoryItem.findOne({ _id: String(req.params.id), storeId }).select({ stockUnitCode: 1 }).lean()
         if (!current) return res.status(404).json({ success: false, message: 'Inventory item not found' })
         if (stockUnitCode && stockUnitCode !== current.stockUnitCode) {
             const [hasReceipt, hasStocktake, hasAdjustment] = await Promise.all([
-                InventoryReceipt.exists({ storeId, 'lines.inventoryItemId': current._id }),
+                InventoryReceipt.exists({ storeId, inventoryStatus: { $ne: 'pending' }, 'lines.inventoryItemId': current._id }),
                 InventoryStocktake.exists({ storeId, 'lines.inventoryItemId': current._id }),
                 InventoryAdjustment.exists({ storeId, inventoryItemId: current._id }),
             ])
             if (hasReceipt || hasStocktake || hasAdjustment) return res.status(400).json({ success: false, message: 'Stock unit cannot be changed after inventory activity' })
         }
-        const item = await InventoryItem.findOneAndUpdate({ _id: String(req.params.id), storeId }, { $set: { name, stockUnitCode, purchaseUnits, minimumStock, note, active } }, { new: true, runValidators: true })
+        const updates = { name, stockUnitCode, purchaseUnits, minimumStock, note, active, ...(inventoryStatus ? { inventoryStatus } : {}) }
+        const item = await InventoryItem.findOneAndUpdate({ _id: String(req.params.id), storeId }, { $set: updates }, { new: true, runValidators: true })
         if (!item) return res.status(404).json({ success: false, message: 'Inventory item not found' })
         emitStoreEvent(String(storeId), 'inventory.item.updated', { inventoryItemId: String(item._id), changedFields: ['updated'] })
         return res.json({ success: true, data: item })
@@ -92,17 +96,18 @@ export const createInventoryReceipt = async (req: Request, res: Response) => {
     const session = await mongoose.startSession()
     try {
         const storeId = (req as AuthRequest).user.storeId
-        const { supplierName, receivedAt, note, lines } = req.body
+        const { supplierName, receivedAt, note, lines, paymentMethod = 'cash' } = req.body
         const { normalized: normalizedLines, itemMap } = await normalizeReceiptLines(String(storeId), lines)
         const totalAmount = normalizedLines.reduce((sum, line) => sum + line.total, 0)
         const itemNames = [...new Set(normalizedLines.map((line) => itemMap.get(String(line.inventoryItemId))?.name).filter(Boolean))]
         const expenseName = itemNames.length === 1 ? itemNames[0] : itemNames.join(', ')
         let receipt: any; let expense: any
         await session.withTransaction(async () => {
-            receipt = (await InventoryReceipt.create([{ storeId, supplierName, receivedAt, note, lines: normalizedLines, totalAmount }], { session }))[0]
-            expense = (await Expense.create([{ storeId, name: expenseName || (supplierName ? `Purchase: ${supplierName}` : 'Inventory purchase'), quantity: 1, unit: '', unitPrice: totalAmount, price: totalAmount, type: 'inventory_purchase', category: 'raw_material', receiptId: receipt._id, note }], { session }))[0]
+            const hasPendingItem = [...itemMap.values()].some((item: any) => item.inventoryStatus === 'pending')
+            receipt = (await InventoryReceipt.create([{ storeId, supplierName, receivedAt, note, lines: normalizedLines, totalAmount, inventoryStatus: hasPendingItem ? 'pending' : 'posted' }], { session }))[0]
+            expense = (await Expense.create([{ storeId, name: expenseName || (supplierName ? `Purchase: ${supplierName}` : 'Inventory purchase'), quantity: 1, unit: '', unitPrice: totalAmount, price: totalAmount, type: 'inventory_purchase', category: 'raw_material', paymentMethod, receiptId: receipt._id, note }], { session }))[0]
             await InventoryReceipt.updateOne({ _id: receipt._id }, { $set: { expenseId: expense._id } }, { session })
-            await applyStockDeltas(String(storeId), stockDeltas(normalizedLines), session)
+            if (receipt.inventoryStatus !== 'pending') await applyStockDeltas(String(storeId), stockDeltas(normalizedLines), session)
         })
         return res.status(201).json({ success: true, data: { receipt, expense } })
     } catch (error: any) {
@@ -120,8 +125,8 @@ export const updateInventoryReceipt = async (req: Request, res: Response) => {
         const { normalized: normalizedLines, itemMap } = await normalizeReceiptLines(storeId, lines)
         const totalAmount = normalizedLines.reduce((sum, line) => sum + line.total, 0)
         const itemNames = [...new Set(normalizedLines.map((line) => itemMap.get(String(line.inventoryItemId))?.name).filter(Boolean))]
-        const deltas = stockDeltas(receipt.lines, -1)
-        for (const [id, quantity] of stockDeltas(normalizedLines)) deltas.set(id, (deltas.get(id) || 0) + quantity)
+        const deltas = receipt.inventoryStatus !== 'pending' ? stockDeltas(receipt.lines, -1) : new Map<string, number>()
+        if (receipt.inventoryStatus !== 'pending') for (const [id, quantity] of stockDeltas(normalizedLines)) deltas.set(id, (deltas.get(id) || 0) + quantity)
         const receiptUpdates: Record<string, unknown> = { lines: normalizedLines, totalAmount }
         if (supplierName !== undefined) receiptUpdates.supplierName = supplierName
         if (receivedAt !== undefined) receiptUpdates.receivedAt = receivedAt
@@ -129,7 +134,7 @@ export const updateInventoryReceipt = async (req: Request, res: Response) => {
         const expenseUpdates: Record<string, unknown> = { name: itemNames.join(', ') || 'Inventory purchase', unitPrice: totalAmount, price: totalAmount }
         if (note !== undefined) expenseUpdates.note = note
         await session.withTransaction(async () => {
-            await applyStockDeltas(storeId, deltas, session)
+            if (receipt.inventoryStatus !== 'pending') await applyStockDeltas(storeId, deltas, session)
             await InventoryReceipt.updateOne({ _id: receipt._id }, { $set: receiptUpdates }, { session })
             if (receipt.expenseId) await Expense.updateOne({ _id: receipt.expenseId, storeId, type: 'inventory_purchase' }, { $set: expenseUpdates }, { session })
         })
@@ -146,12 +151,32 @@ export const deleteInventoryReceipt = async (req: Request, res: Response) => {
         const receipt = await InventoryReceipt.findOne({ _id: String(req.params.id), storeId }).lean()
         if (!receipt) return res.status(404).json({ success: false, message: 'Inventory receipt not found' })
         await session.withTransaction(async () => {
-            await applyStockDeltas(storeId, stockDeltas(receipt.lines, -1), session)
+            if (receipt.inventoryStatus !== 'pending') await applyStockDeltas(storeId, stockDeltas(receipt.lines, -1), session)
             await InventoryReceipt.deleteOne({ _id: receipt._id }, { session })
             if (receipt.expenseId) await Expense.deleteOne({ _id: receipt.expenseId, storeId }, { session })
         })
         return res.json({ success: true })
     } catch (error: any) {
         return res.status(400).json({ success: false, message: error?.message || 'Error deleting inventory receipt' })
+    } finally { await session.endSession() }
+}
+
+export const approveInventoryReceipt = async (req: Request, res: Response) => {
+    const session = await mongoose.startSession()
+    try {
+        const storeId = String((req as AuthRequest).user.storeId)
+        const receipt = await InventoryReceipt.findOne({ _id: String(req.params.id), storeId }).lean()
+        if (!receipt) return res.status(404).json({ success: false, message: 'Inventory receipt not found' })
+        if (receipt.inventoryStatus === 'posted') return res.json({ success: true, data: receipt })
+        const { normalized: lines } = await normalizeReceiptLines(storeId, receipt.lines.map((line: any) => ({ inventoryItemId: line.inventoryItemId, quantity: line.quantity, unitCode: line.unitCode, unitPrice: line.unitPrice })), true)
+        await session.withTransaction(async () => {
+            const itemIds = lines.map((line) => line.inventoryItemId)
+            await InventoryItem.updateMany({ _id: { $in: itemIds }, storeId, inventoryStatus: 'pending' }, { $set: { inventoryStatus: 'active' } }, { session })
+            await InventoryReceipt.updateOne({ _id: receipt._id, storeId }, { $set: { lines, inventoryStatus: 'posted', totalAmount: lines.reduce((sum, line) => sum + line.total, 0) } }, { session })
+            await applyStockDeltas(storeId, stockDeltas(lines), session)
+        })
+        return res.json({ success: true, data: { ...receipt, lines, inventoryStatus: 'posted' } })
+    } catch (error: any) {
+        return res.status(400).json({ success: false, message: error?.message || 'Error approving inventory receipt' })
     } finally { await session.endSession() }
 }
