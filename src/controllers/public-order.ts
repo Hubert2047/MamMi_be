@@ -18,6 +18,14 @@ const QR_ORDER_WINDOW_MS = 60 * 1000
 const MAX_QR_ORDERS_PER_WINDOW = 8
 const ONLINE_PHONE_WINDOW_MS = 30 * 60 * 1000
 const MAX_ONLINE_ORDERS_PER_PHONE_WINDOW = 3
+const onlineOrderingDisabled = () => process.env.ONLINE_ORDERING_ENABLED === 'false'
+const rejectDisabledOnlineOrdering = (res: Response, source: unknown) => {
+    if (source === 'online' && onlineOrderingDisabled()) {
+        res.status(503).json({ success: false, code: 'ONLINE_ORDERING_DISABLED', message: 'Online ordering is not available yet' })
+        return true
+    }
+    return false
+}
 const activeTableForToken = (token: string) => StoreTable.findOne({ qrToken: token, active: true }).lean()
 const activeSessionForTable = (storeId: any, tableId: any) => TableSession.findOne({ storeId, tableId, status: 'active', expiresAt: { $gt: new Date() } }).lean()
 const activeSessionForId = (storeId: any, sessionId: any) => TableSession.findOne({ _id: sessionId, storeId, status: 'active', expiresAt: { $gt: new Date() } }).lean()
@@ -132,6 +140,7 @@ export const getOnlineMenu = async (_req: Request, res: Response) => {
 }
 
 export const createOnlineGuestCart = async (req: Request, res: Response) => {
+    if (onlineOrderingDisabled()) return res.status(503).json({ success: false, code: 'ONLINE_ORDERING_DISABLED', message: 'Online ordering is not available yet' })
     const type = req.body?.type
     if (type !== 'dine_in' && type !== 'takeaway') return res.status(400).json({ success: false, code: 'INVALID_ORDER_TYPE', message: 'Order type must be dine-in or takeaway' })
     try {
@@ -145,6 +154,7 @@ export const createOnlineGuestCart = async (req: Request, res: Response) => {
 export const getGuestCart = async (req: Request, res: Response) => {
     const cart = await GuestCart.findOne({ cartToken: String(req.params.cartToken) }).lean()
     if (!cart) return res.status(404).json({ success: false, code: 'CART_NOT_FOUND', message: 'Cart not found' })
+    if (rejectDisabledOnlineOrdering(res, cart.source)) return
     if (!(await requireActiveCartSession(cart))) return res.status(409).json({ success: false, code: 'SESSION_EXPIRED', message: 'Table ordering session is not active' })
     res.json({ success: true, data: { cartToken: cart.cartToken, table: cart.table, lines: cart.lines, status: cart.status } })
 }
@@ -154,6 +164,7 @@ export const updateGuestCart = async (req: Request, res: Response) => {
     if (!lines || lines.some((line: any) => !line.itemId || !Number.isInteger(line.quantity) || line.quantity < 1 || line.quantity > 99 || !Array.isArray(line.noteOptions) || !Array.isArray(line.addonIds))) return res.status(400).json({ success: false, message: 'Invalid cart lines' })
     const existing = await GuestCart.findOne({ cartToken: String(req.params.cartToken), status: 'draft' }).select({ source: 1, storeId: 1, tableSessionId: 1 }).lean()
     if (!existing) return res.status(409).json({ success: false, code: 'CART_LOCKED', message: 'Cart is unavailable' })
+    if (rejectDisabledOnlineOrdering(res, existing.source)) return
     if (!(await requireActiveCartSession(existing))) return res.status(409).json({ success: false, code: 'SESSION_EXPIRED', message: 'Table ordering session is not active' })
     const update: any = { lines, expiresAt: new Date(Date.now() + CART_TTL_MS) }
     if (req.body.type !== undefined) {
@@ -168,6 +179,7 @@ export const updateGuestCart = async (req: Request, res: Response) => {
 export const previewGuestCart = async (req: Request, res: Response) => {
     const cart = await GuestCart.findOne({ cartToken: String(req.params.cartToken), status: 'draft' }).lean()
     if (!cart) return res.status(409).json({ success: false, code: 'CART_LOCKED', message: 'Cart is unavailable' })
+    if (rejectDisabledOnlineOrdering(res, cart.source)) return
     if (!(await requireActiveCartSession(cart))) return res.status(409).json({ success: false, code: 'SESSION_EXPIRED', message: 'Table ordering session is not active' })
     const lines = Array.isArray(req.body?.lines) ? req.body.lines : cart.lines
     if (!Array.isArray(lines) || lines.some((line: any) => !line.itemId || !Number.isInteger(line.quantity) || line.quantity < 1 || line.quantity > 99 || !Array.isArray(line.noteOptions) || !Array.isArray(line.addonIds))) return res.status(400).json({ success: false, message: 'Invalid cart lines' })
@@ -193,6 +205,7 @@ export const previewGuestCart = async (req: Request, res: Response) => {
 export const confirmGuestCart = async (req: Request, res: Response) => {
     const draft = await GuestCart.findOne({ cartToken: String(req.params.cartToken), status: 'draft' }).select({ source: 1, storeId: 1, tableSessionId: 1 }).lean()
     if (!draft) return res.status(409).json({ success: false, code: 'CART_LOCKED', message: 'Cart was already confirmed or is unavailable' })
+    if (rejectDisabledOnlineOrdering(res, draft.source)) return
     if (!(await requireActiveCartSession(draft))) return res.status(409).json({ success: false, code: 'SESSION_EXPIRED', message: 'Table ordering session is not active' })
     if ((draft.source || 'qr') === 'qr' && !(await reserveQrOrderSlot(draft.storeId, draft.tableSessionId))) return res.status(429).json({ success: false, code: 'QR_ORDER_RATE_LIMITED', message: 'Too many orders were sent for this table session' })
     if ((draft.source || 'qr') === 'online') {
