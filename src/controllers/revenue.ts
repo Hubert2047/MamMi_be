@@ -5,11 +5,13 @@ import Store from '../models/store.js'
 import { getFromDayUntilNow } from '../utils/index.js'
 import { assertFinancialPeriodOpen, FinancialPeriodClosedError } from '../services/financialPeriodLock.js'
 import type { AuthRequest } from '../middlewares/auth.js'
+import { emitStoreEvent } from '../realtime.js'
 export const createRevenue = async (req: Request, res: Response) => {
     try {
         const { name, price, note, paymentMethod = 'cash' } = req.body
         const revenue = new Revenue({ storeId: (req as AuthRequest).user.storeId, name, price, note, paymentMethod })
         await revenue.save()
+        emitStoreEvent(String(revenue.storeId), 'revenue.created', { revenueId: String(revenue._id) })
         res.status(201).json({ success: true, data: revenue })
     } catch (error) {
         res.status(500).json({ success: false, message: 'Error creating Revenue', error })
@@ -63,6 +65,8 @@ export const deleteRevenue = async (req: Request, res: Response) => {
             })
         }
 
+        emitStoreEvent(storeId, 'revenue.deleted', { revenueId: String(deletedRevenue._id) })
+
         res.json({
             success: true,
             message: 'Revenue deleted successfully',
@@ -72,6 +76,7 @@ export const deleteRevenue = async (req: Request, res: Response) => {
         if (error instanceof FinancialPeriodClosedError) {
             return res.status(error.statusCode).json({ success: false, message: error.message })
         }
+
         res.status(500).json({
             success: false,
             message: 'Error deleting Revenue',
@@ -114,6 +119,8 @@ export const updateRevenue = async (req: Request, res: Response) => {
             })
         }
 
+        emitStoreEvent(storeId, 'revenue.updated', { revenueId: String(updated._id) })
+
         return res.json({
             success: true,
             data: updated,
@@ -122,6 +129,7 @@ export const updateRevenue = async (req: Request, res: Response) => {
         if (error instanceof FinancialPeriodClosedError) {
             return res.status(error.statusCode).json({ success: false, message: error.message })
         }
+
         return res.status(500).json({
             success: false,
             message: 'Error updating Revenue',

@@ -8,7 +8,7 @@ import { Role } from './constants/role.js'
 import PosDevice from './models/pos-device.js'
 import { createHash } from 'node:crypto'
 
-export type RealtimeChannel = 'catalog' | 'orders' | 'closing'
+export type RealtimeChannel = 'catalog' | 'orders' | 'closing' | 'finance'
 export type RealtimeClientType = 'pos' | 'admin' | 'customer' | 'order'
 type StaffSocketUser = { account: string; role: Role; storeId: string; publicCatalogOnly?: false }
 type PublicCatalogSocketUser = { storeId: string; publicCatalogOnly: true }
@@ -30,6 +30,12 @@ const channelForEvent: Record<string, RealtimeChannel> = {
     'order.payment.updated': 'orders',
     'closing.created': 'closing',
     'closing.voided': 'closing',
+    'revenue.created': 'finance',
+    'revenue.updated': 'finance',
+    'revenue.deleted': 'finance',
+    'expense.created': 'finance',
+    'expense.updated': 'finance',
+    'expense.deleted': 'finance',
 }
 
 export const roomForStore = (storeId: string) => `store:${storeId}`
@@ -37,9 +43,9 @@ export const roomForStoreChannel = (storeId: string, channel: RealtimeChannel) =
 export const roomForOrder = (orderId: string) => `order:${orderId}`
 
 export const channelsForClient = (clientType: RealtimeClientType, role: Role): RealtimeChannel[] => {
-    if (clientType === 'admin' || role === Role.SuperAdmin || role === Role.Admin) return ['catalog', 'orders', 'closing']
+    if (clientType === 'admin' || role === Role.SuperAdmin || role === Role.Admin) return ['catalog', 'orders', 'closing', 'finance']
     if (clientType === 'customer') return ['catalog']
-    return ['catalog', 'orders']
+    return ['catalog', 'orders', 'finance']
 }
 
 export const channelForRealtimeEvent = (event: string): RealtimeChannel | null => channelForEvent[event] ?? null
@@ -87,7 +93,7 @@ const clientTypeOf = (socket: Socket): RealtimeClientType => {
 
 const leaveStoreRooms = (socket: Socket, storeId: string) => {
     socket.leave(roomForStore(storeId))
-    for (const channel of ['catalog', 'orders', 'closing'] as RealtimeChannel[]) socket.leave(roomForStoreChannel(storeId, channel))
+    for (const channel of ['catalog', 'orders', 'closing', 'finance'] as RealtimeChannel[]) socket.leave(roomForStoreChannel(storeId, channel))
 }
 
 const joinStoreRooms = (socket: Socket, storeId: string) => {

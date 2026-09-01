@@ -6,6 +6,7 @@ import Store from '../models/store.js'
 import { getFromDayUntilNow } from '../utils/index.js'
 import { assertFinancialPeriodOpen, FinancialPeriodClosedError } from '../services/financialPeriodLock.js'
 import type { AuthRequest } from '../middlewares/auth.js'
+import { emitStoreEvent } from '../realtime.js'
 export const createExpense = async (req: Request, res: Response) => {
     try {
         const { name, quantity = 1, unit = '', unitPrice, price, note, category = 'other', paymentMethod = 'cash' } = req.body
@@ -16,6 +17,7 @@ export const createExpense = async (req: Request, res: Response) => {
         }
         const expense = new Expense({ storeId: (req as AuthRequest).user.storeId, name, quantity: normalizedQuantity, unit, unitPrice: normalizedUnitPrice, price: normalizedQuantity * normalizedUnitPrice, note, category, paymentMethod, type: 'other' })
         await expense.save()
+        emitStoreEvent(String(expense.storeId), 'expense.created', { expenseId: String(expense._id) })
         res.status(201).json({ success: true, data: expense })
     } catch (error) {
         res.status(500).json({ success: false, message: 'Error creating expense', error })
@@ -79,6 +81,8 @@ export const deleteExpense = async (req: Request, res: Response) => {
             })
         }
 
+        emitStoreEvent(storeId, 'expense.deleted', { expenseId: String(deletedExpense._id) })
+
         res.json({
             success: true,
             message: 'Expense deleted successfully',
@@ -138,6 +142,8 @@ export const updateExpense = async (req: Request, res: Response) => {
                 message: 'Không tìm thấy expense',
             })
         }
+
+        emitStoreEvent(storeId, 'expense.updated', { expenseId: String(updated._id) })
 
         return res.json({
             success: true,

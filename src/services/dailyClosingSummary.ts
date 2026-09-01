@@ -7,6 +7,7 @@ import Store from '../models/store.js'
 import mongoose from 'mongoose'
 
 export type SalesByPaymentSummary = Record<string, { totalSales: number; count: number }>
+export type OtherRevenueByPaymentSummary = Record<'cash' | 'bank_transfer' | 'other', number>
 
 export type DailyClosingSummary = {
     periodStart: Date
@@ -14,6 +15,7 @@ export type DailyClosingSummary = {
     salesByPayment: SalesByPaymentSummary
     cashSales: number
     otherRevenueTotal: number
+    otherRevenueByPayment: OtherRevenueByPaymentSummary
     expensesTotal: number
     previousClosingAmount: number
     systemAmount: number
@@ -34,8 +36,8 @@ export async function getDailyClosingSummary(storeId: string, end = new Date()):
             { $group: { _id: '$paymentMethod', totalSales: { $sum: '$totalPrice' }, count: { $sum: 1 } } },
         ]),
         Revenue.aggregate([
-            { $match: { storeId: mongoStoreId, createdAt: periodFilter, $or: [{ paymentMethod: 'cash' }, { paymentMethod: { $exists: false } }] } },
-            { $group: { _id: null, total: { $sum: '$price' } } },
+            { $match: { storeId: mongoStoreId, createdAt: periodFilter } },
+            { $group: { _id: { $ifNull: ['$paymentMethod', 'cash'] }, total: { $sum: '$price' } } },
         ]),
         Expense.aggregate([
             { $match: { storeId: mongoStoreId, createdAt: periodFilter, $or: [{ paymentMethod: 'cash' }, { paymentMethod: { $exists: false } }] } },
@@ -48,7 +50,17 @@ export async function getDailyClosingSummary(storeId: string, end = new Date()):
         salesByPayment[sale._id] = { totalSales: sale.totalSales, count: sale.count }
     })
     const cashSales = salesByPayment.cash?.totalSales ?? 0
-    const otherRevenueTotal = otherRevenueResult[0]?.total ?? 0
+    const otherRevenueByPayment: OtherRevenueByPaymentSummary = {
+        cash: 0,
+        bank_transfer: 0,
+        other: 0,
+    }
+    otherRevenueResult.forEach((revenue) => {
+        if (revenue._id in otherRevenueByPayment) {
+            otherRevenueByPayment[revenue._id as keyof OtherRevenueByPaymentSummary] = revenue.total
+        }
+    })
+    const otherRevenueTotal = Object.values(otherRevenueByPayment).reduce((total, value) => total + value, 0)
     const expensesTotal = expensesResult[0]?.total ?? 0
     const previousClosingAmount = latestClosing?.actualTotal ?? 0
 
@@ -58,8 +70,9 @@ export async function getDailyClosingSummary(storeId: string, end = new Date()):
         salesByPayment,
         cashSales,
         otherRevenueTotal,
+        otherRevenueByPayment,
         expensesTotal,
         previousClosingAmount,
-        systemAmount: calculateSystemAmount(previousClosingAmount, cashSales, otherRevenueTotal, expensesTotal),
+        systemAmount: calculateSystemAmount(previousClosingAmount, cashSales, otherRevenueByPayment.cash, expensesTotal),
     }
 }
