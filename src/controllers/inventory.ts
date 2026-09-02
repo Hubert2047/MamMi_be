@@ -3,7 +3,6 @@ import type { Request, Response } from 'express'
 import InventoryItem from '../models/inventory-item.js'
 import InventoryReceipt from '../models/inventory-receipt.js'
 import InventoryStocktake from '../models/inventory-stocktake.js'
-import InventoryAdjustment from '../models/inventory-adjustment.js'
 import Expense from '../models/expense.js'
 import type { AuthRequest } from '../middlewares/auth.js'
 import { emitStoreEvent } from '../realtime.js'
@@ -68,12 +67,11 @@ export const updateInventoryItem = async (req: Request, res: Response) => {
         const current = await InventoryItem.findOne({ _id: String(req.params.id), storeId }).select({ stockUnitCode: 1 }).lean()
         if (!current) return res.status(404).json({ success: false, message: 'Inventory item not found' })
         if (stockUnitCode && stockUnitCode !== current.stockUnitCode) {
-            const [hasReceipt, hasStocktake, hasAdjustment] = await Promise.all([
+            const [hasReceipt, hasStocktake] = await Promise.all([
                 InventoryReceipt.exists({ storeId, inventoryStatus: { $ne: 'pending' }, 'lines.inventoryItemId': current._id }),
                 InventoryStocktake.exists({ storeId, 'lines.inventoryItemId': current._id }),
-                InventoryAdjustment.exists({ storeId, inventoryItemId: current._id }),
             ])
-            if (hasReceipt || hasStocktake || hasAdjustment) return res.status(400).json({ success: false, message: 'Stock unit cannot be changed after inventory activity' })
+            if (hasReceipt || hasStocktake) return res.status(400).json({ success: false, message: 'Stock unit cannot be changed after inventory activity' })
         }
         const updates = { name, stockUnitCode, purchaseUnits, minimumStock, note, active, ...(inventoryStatus ? { inventoryStatus } : {}) }
         const item = await InventoryItem.findOneAndUpdate({ _id: String(req.params.id), storeId }, { $set: updates }, { new: true, runValidators: true })

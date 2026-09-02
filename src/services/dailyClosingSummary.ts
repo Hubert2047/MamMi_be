@@ -18,6 +18,7 @@ export type DailyClosingSummary = {
     otherRevenueByPayment: OtherRevenueByPaymentSummary
     expensesTotal: number
     previousClosingAmount: number
+    previousClosingCash: Record<string, number | string>
     systemAmount: number
 }
 
@@ -63,6 +64,7 @@ export async function getDailyClosingSummary(storeId: string, end = new Date()):
     const otherRevenueTotal = Object.values(otherRevenueByPayment).reduce((total, value) => total + value, 0)
     const expensesTotal = expensesResult[0]?.total ?? 0
     const previousClosingAmount = latestClosing?.actualTotal ?? 0
+    const previousClosingCash = latestClosing?.cash ?? {}
 
     return {
         periodStart,
@@ -73,6 +75,7 @@ export async function getDailyClosingSummary(storeId: string, end = new Date()):
         otherRevenueByPayment,
         expensesTotal,
         previousClosingAmount,
+        previousClosingCash,
         systemAmount: calculateSystemAmount(previousClosingAmount, cashSales, otherRevenueByPayment.cash, expensesTotal),
     }
 }

@@ -3,8 +3,7 @@ import { randomBytes } from 'node:crypto'
 import type { AuthRequest } from '../middlewares/auth.js'
 import StoreTable from '../models/store-table.js'
 import TableSession from '../models/table-session.js'
-
-const SESSION_DURATION_MS = 4 * 60 * 60 * 1000
+import { TABLE_SESSION_DURATION_MS, tableSessionExpiry } from '../utils/tableSession.js'
 
 const expireSessions = (storeId: string) => TableSession.updateMany({ storeId, status: 'active', expiresAt: { $lte: new Date() } }, { $set: { status: 'expired' } })
 const serializeSession = (session: any) => session ? { _id: String(session._id), status: session.status, openedAt: session.openedAt, expiresAt: session.expiresAt, lastExtendedAt: session.lastExtendedAt, closedAt: session.closedAt } : null
@@ -35,7 +34,7 @@ export const openStoreTableSession = async (req: Request, res: Response) => {
         const existing = await TableSession.findOne({ storeId, tableId: table._id, status: 'active' }).lean()
         if (existing) return res.json({ success: true, data: serializeSession(existing) })
         const now = new Date()
-        const session = await TableSession.create({ storeId, tableId: table._id, status: 'active', openedAt: now, expiresAt: new Date(now.getTime() + SESSION_DURATION_MS) })
+        const session = await TableSession.create({ storeId, tableId: table._id, status: 'active', openedAt: now, expiresAt: tableSessionExpiry(now) })
         res.status(201).json({ success: true, data: serializeSession(session) })
     } catch (error: any) {
         if (error?.code === 11000) {
@@ -54,7 +53,7 @@ export const extendStoreTableSession = async (req: Request, res: Response) => {
         if (!session) return res.status(409).json({ success: false, code: 'SESSION_NOT_ACTIVE', message: 'Table session is not active' })
         const now = new Date()
         const base = Math.max(session.expiresAt.getTime(), now.getTime())
-        session.expiresAt = new Date(base + SESSION_DURATION_MS)
+        session.expiresAt = new Date(base + TABLE_SESSION_DURATION_MS)
         session.lastExtendedAt = now
         await session.save()
         res.json({ success: true, data: serializeSession(session) })
