@@ -77,6 +77,14 @@ export const createStoreTable = async (req: Request, res: Response) => {
         const name = String(req.body.name || code).trim()
         if (!code || !name) return res.status(400).json({ success: false, message: 'Table code is required' })
         const storeId = (req as AuthRequest).user.storeId
+        const inactiveTable = await StoreTable.findOne({ storeId, code, active: false })
+        if (inactiveTable) {
+            inactiveTable.name = name
+            inactiveTable.active = true
+            inactiveTable.qrToken = randomBytes(24).toString('base64url')
+            await inactiveTable.save()
+            return res.status(201).json({ success: true, data: inactiveTable })
+        }
         const table = await StoreTable.create({ storeId, code, name })
         res.status(201).json({ success: true, data: table })
     } catch (error: any) {
@@ -85,11 +93,43 @@ export const createStoreTable = async (req: Request, res: Response) => {
     }
 }
 
+export const updateStoreTable = async (req: Request, res: Response) => {
+    try {
+        const storeId = (req as AuthRequest).user.storeId
+        const table = await StoreTable.findOne({ _id: String(req.params.id), storeId })
+        if (!table) return res.status(404).json({ success: false, message: 'Table not found' })
+        if (req.body.code !== undefined) {
+            const code = String(req.body.code || '').trim()
+            if (!code) return res.status(400).json({ success: false, message: 'Table code is required' })
+            table.code = code
+        }
+        if (req.body.name !== undefined) {
+            const name = String(req.body.name || '').trim()
+            if (!name) return res.status(400).json({ success: false, message: 'Table name is required' })
+            table.name = name
+        }
+        if (req.body.active !== undefined) {
+            const active = Boolean(req.body.active)
+            if (!active) {
+                await expireSessions(storeId)
+                const activeSession = await TableSession.exists({ storeId, tableId: table._id, status: 'active' })
+                if (activeSession) return res.status(409).json({ success: false, code: 'TABLE_SESSION_ACTIVE', message: 'Close the active table session before deactivating the table' })
+            }
+            table.active = active
+        }
+        await table.save()
+        res.json({ success: true, data: table })
+    } catch (error: any) {
+        if (error?.code === 11000) return res.status(409).json({ success: false, message: 'This table code already exists' })
+        res.status(400).json({ success: false, message: 'Unable to update table' })
+    }
+}
+
 export const regenerateStoreTableQr = async (req: Request, res: Response) => {
     try {
         const storeId = (req as AuthRequest).user.storeId
         const table = await StoreTable.findOneAndUpdate(
-            { _id: String(req.params.id), storeId },
+            { _id: String(req.params.id), storeId, active: true },
             { $set: { qrToken: randomBytes(24).toString('base64url') } },
             { new: true, runValidators: true },
         ).lean()
@@ -101,7 +141,7 @@ export const regenerateStoreTableQr = async (req: Request, res: Response) => {
 export const regenerateAllStoreTableQr = async (req: Request, res: Response) => {
     try {
         const storeId = (req as AuthRequest).user.storeId
-        const tables = await StoreTable.find({ storeId }).select({ _id: 1 }).lean()
+        const tables = await StoreTable.find({ storeId, active: true }).select({ _id: 1 }).lean()
         if (tables.length > 0) {
             await StoreTable.bulkWrite(tables.map((table) => ({ updateOne: { filter: { _id: table._id }, update: { $set: { qrToken: randomBytes(24).toString('base64url') } } } })))
         }
