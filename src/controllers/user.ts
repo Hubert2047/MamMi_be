@@ -47,15 +47,19 @@ export const createManagedUser = async (req: Request, res: Response) => {
 export const updateManagedUser = async (req: Request, res: Response) => {
     try {
         const { id } = req.params
-        const { password, role, storeId, active } = req.body
+        const { account, password, role, storeId, active } = req.body
         if (!mongoose.isValidObjectId(id)) return res.status(400).json({ error: true, message: 'Invalid user id' })
+        const normalizedAccount = account === undefined ? undefined : typeof account === 'string' ? account.trim() : ''
+        if (normalizedAccount !== undefined && invalidAccount(normalizedAccount)) return res.status(400).json({ error: true, message: 'Account must be 3-50 characters and use only letters, numbers, dot, underscore or hyphen' })
         if (role !== undefined && !managedRoles.includes(role)) return res.status(400).json({ error: true, message: 'Only Admin or Employee roles are allowed' })
         if (storeId !== undefined && !mongoose.isValidObjectId(storeId)) return res.status(400).json({ error: true, message: 'A valid store is required' })
         if (storeId !== undefined && !(await Store.exists({ _id: storeId, active: true }))) return res.status(400).json({ error: true, message: 'Store is not available' })
         if (password !== undefined && (typeof password !== 'string' || password.length < 6)) return res.status(400).json({ error: true, message: 'Password must be at least 6 characters' })
         const user = await User.findOne({ _id: id, role: { $in: [...managedRoles, Role.SuperAdmin] } })
         if (!user) return res.status(404).json({ error: true, message: 'User not found' })
-        if (user.role === Role.SuperAdmin && (role !== undefined || storeId !== undefined || active !== undefined)) return res.status(400).json({ error: true, message: 'The SuperAdmin account can only change its password' })
+        if (user.role === Role.SuperAdmin && (normalizedAccount !== undefined || role !== undefined || storeId !== undefined || active !== undefined)) return res.status(400).json({ error: true, message: 'The SuperAdmin account can only change its password' })
+        if (normalizedAccount !== undefined && normalizedAccount !== user.account && await User.exists({ account: normalizedAccount, _id: { $ne: id } })) return res.status(409).json({ error: true, message: 'Account already exists' })
+        if (normalizedAccount !== undefined) user.account = normalizedAccount
         if (role !== undefined) user.role = role
         if (storeId !== undefined) { user.storeIds = [storeId]; user.defaultStoreId = storeId }
         if (active !== undefined) user.active = Boolean(active)

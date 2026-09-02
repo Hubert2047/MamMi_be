@@ -29,9 +29,13 @@ export const createUnit = async (req: Request, res: Response) => {
 }
 
 export const updateUnit = async (req: Request, res: Response) => {
-    const { code, names, category, active } = req.body
-    const unit = await Unit.findByIdAndUpdate(req.params.id, { $set: { code, names, category, active } }, { new: true, runValidators: true })
-    if (!unit) return res.status(404).json({ success: false, message: 'Unit not found' })
-    await emitCatalogEventToStores('inventory.unit.updated', { unitId: String(unit._id), changedFields: ['updated'] })
-    return res.json({ success: true, data: unit })
+    try {
+        const { code, names, category, active } = req.body
+        const unit = await Unit.findByIdAndUpdate(req.params.id, { $set: { code, names, category, active } }, { new: true, runValidators: true })
+        if (!unit) return res.status(404).json({ success: false, message: 'Unit not found' })
+        await emitCatalogEventToStores('inventory.unit.updated', { unitId: String(unit._id), changedFields: ['updated'] })
+        return res.json({ success: true, data: unit })
+    } catch (error: any) {
+        return res.status(error?.code === 11000 ? 409 : 400).json({ success: false, message: error?.code === 11000 ? 'Unit code already exists' : 'Invalid unit' })
+    }
 }
