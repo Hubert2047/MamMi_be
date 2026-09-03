@@ -9,7 +9,7 @@ import { calculateTotal } from '../utils/orderCalculations.js'
 import Promotion from '../models/promotion.js'
 import StorePromotion from '../models/store-promotion.js'
 import { calculatePromotionPricing, isPromotionAvailableAt, matchesExpectedPromotionPricing, type PricePromotion, type PromotionOrderItem } from '../utils/promotionCalculations.js'
-import { getPaidAt } from '../utils/orderPaymentCalculations.js'
+import { getPaidAt, isCashReceivedSufficient } from '../utils/orderPaymentCalculations.js'
 import { buildPaidOrderFilter } from '../utils/paidOrderFilters.js'
 import { assertFinancialPeriodOpen, FinancialPeriodClosedError } from '../services/financialPeriodLock.js'
 import type { AuthRequest } from '../middlewares/auth.js'
@@ -114,9 +114,10 @@ export const createOrder = async (req: Request, res: Response) => {
             const selectedPromotionIds = Array.isArray(order.selectedPromotionIds) ? order.selectedPromotionIds.map(String) : []
             const pricing = await calculatePromotionsForOrder(storeId, normalizedItems, selectedPromotionIds)
             if (!matchesExpectedPromotionPricing(order.expectedPricing, pricing)) return res.status(409).json({ success: false, code: 'ORDER_PRICING_CHANGED', message: 'Order pricing changed', data: { items: normalizedItems, pricing, reason: 'CURRENT_PRICING_CHANGED' } })
+            if (order.status === 'paid' && order.paymentMethod === 'cash' && !isCashReceivedSufficient(order.cashReceived, pricing.total)) return res.status(400).json({ success: false, code: 'INSUFFICIENT_CASH', message: 'Cash received is less than the order total' })
             const updated = await Order.findOneAndUpdate(
                 { _id: order._id, storeId, status: 'pending', version: order.version },
-                { $set: { status: 'paid', paymentMethod: order.paymentMethod, paidAt: getPaidAt('paid'), items: normalizedItems, totalPrice: pricing.total, appliedPromotions: pricing.appliedPromotions }, $inc: { version: 1 } },
+                { $set: { status: 'paid', paymentMethod: order.paymentMethod, paidAt: getPaidAt('paid'), items: normalizedItems, totalPrice: pricing.total, appliedPromotions: pricing.appliedPromotions, ...(order.paymentMethod === 'cash' ? { cashReceived: order.cashReceived } : {}) }, $inc: { version: 1 } },
                 { returnDocument: 'after' },
             )
             if (!updated) {
@@ -145,6 +146,7 @@ export const createOrder = async (req: Request, res: Response) => {
         if (selectedPromotionIds.length > 1) return res.status(400).json({ success: false, code: 'MANUAL_PROMOTION_LIMIT', message: 'Only one manual promotion may be selected' })
         const pricing = await calculatePromotionsForOrder(storeId, normalizedItems, selectedPromotionIds)
         if (!matchesExpectedPromotionPricing(order.expectedPricing, pricing)) return res.status(409).json({ success: false, code: 'ORDER_PRICING_CHANGED', message: 'Order pricing changed', data: { items: normalizedItems, pricing, reason: 'CURRENT_PRICING_CHANGED' } })
+        if (order.status === 'paid' && order.paymentMethod === 'cash' && !isCashReceivedSufficient(order.cashReceived, pricing.total)) return res.status(400).json({ success: false, code: 'INSUFFICIENT_CASH', message: 'Cash received is less than the order total' })
         const totalPrice = pricing.total
         const periodId = await getCurrentOrderPeriodId(storeId)
         const sequence = await allocateOrderSequence(storeId, periodId)
@@ -156,6 +158,7 @@ export const createOrder = async (req: Request, res: Response) => {
             storeId,
             items: normalizedItems,
             totalPrice,
+            ...(order.status === 'paid' && order.paymentMethod === 'cash' ? { cashReceived: order.cashReceived } : {}),
             ...(order.pickupAt ? { pickupAt: new Date(order.pickupAt) } : {}),
             status: order.status,
             type: order.type,
@@ -308,9 +311,9 @@ export const printKitchenOrder = async (req: Request, res: Response) => {
 export const updateOrderStatus = async (req: Request, res: Response) => {
     try {
         const id = String(req.params.id)
-        const { status, version, expectedPricing } = req.body
+        const { status, version, expectedPricing, cashReceived } = req.body
         const storeId = (req as AuthRequest).user.storeId
-        const order = await Order.findOne({ _id: id, storeId }).select({ paidAt: 1, status: 1, type: 1, items: 1, appliedPromotions: 1 }).lean()
+        const order = await Order.findOne({ _id: id, storeId }).select({ paidAt: 1, status: 1, type: 1, items: 1, appliedPromotions: 1, paymentMethod: 1 }).lean()
         if (!order) return res.status(404).json({ success: false, message: 'Order not found' })
         if (order.paidAt) await assertFinancialPeriodOpen(storeId, order.paidAt)
 
@@ -321,7 +324,8 @@ export const updateOrderStatus = async (req: Request, res: Response) => {
             const selectedPromotionIds = (order.appliedPromotions || []).filter((promotion: any) => promotion.mode === 'manual').map((promotion: any) => String(promotion.promotionId))
             const pricing = await calculatePromotionsForOrder(storeId, normalizedItems, selectedPromotionIds)
             if (!matchesExpectedPromotionPricing(expectedPricing, pricing)) return res.status(409).json({ success: false, code: 'ORDER_PRICING_CHANGED', message: 'Order pricing changed', data: { items: normalizedItems, pricing, reason: 'CURRENT_PRICING_CHANGED' } })
-            pricingUpdate = { items: normalizedItems, totalPrice: pricing.total, appliedPromotions: pricing.appliedPromotions }
+            if (order.paymentMethod === 'cash' && !isCashReceivedSufficient(cashReceived, pricing.total)) return res.status(400).json({ success: false, code: 'INSUFFICIENT_CASH', message: 'Cash received is less than the order total' })
+            pricingUpdate = { items: normalizedItems, totalPrice: pricing.total, appliedPromotions: pricing.appliedPromotions, ...(order.paymentMethod === 'cash' ? { cashReceived } : {}) }
         }
 
         const updated = await Order.findOneAndUpdate(

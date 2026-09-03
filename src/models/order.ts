@@ -50,6 +50,7 @@ export interface IOrder extends Document {
     sequence?: number
     items: OrderItem[]
     totalPrice: number
+    cashReceived?: number
     pickupAt?: Date
     status: 'pending' | 'paid' | 'cancelled'
     paidAt?: Date
@@ -124,6 +125,7 @@ const OrderSchema = new Schema<IOrder>(
         sequence: { type: Number },
         items: [OrderItemSchema],
         totalPrice: { type: Number, required: true },
+        cashReceived: { type: Number, min: 0 },
         pickupAt: { type: Date },
         paidAt: { type: Date },
         status: {
