@@ -41,6 +41,7 @@ import posDevice from './routers/pos-device.js'
 import upload from './routers/upload.js'
 import lineGroup from './routers/line-group.js'
 import overview from './routers/overview.js'
+import supplier from './routers/supplier.js'
 dotenv.config()
 
 
@@ -81,9 +82,9 @@ const app: Application = express()
         credentials: true,
     }))
     app.use('/api/webhook', webhook)
-    app.use('/api/line-groups', lineGroup)
     app.use(bodyParser.urlencoded({ extended: false }))
     app.use(express.json())
+    app.use('/api/line-groups', lineGroup)
     app.use('/api/refresh-token', refreshTokenRoutes)
     app.use('/api/auth', auth)
     app.use('/api/pos-devices', posDevice)
@@ -96,6 +97,7 @@ const app: Application = express()
     app.use('/api/categories', category)
     app.use('/api/stores', store)
     app.use('/api/overview', overview)
+    app.use('/api/suppliers', supplier)
     app.use('/api/tables', storeTable)
     app.use('/api/users', user)
     app.use('/api/expenses', expense)

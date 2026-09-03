@@ -1,6 +1,8 @@
 import mongoose, { type ClientSession } from 'mongoose'
 import type { Request, Response } from 'express'
 import InventoryItem from '../models/inventory-item.js'
+import IngredientSupplier from '../models/ingredient-supplier.js'
+import Supplier from '../models/supplier.js'
 import InventoryReceipt from '../models/inventory-receipt.js'
 import InventoryStocktake from '../models/inventory-stocktake.js'
 import Expense from '../models/expense.js'
@@ -8,6 +10,35 @@ import type { AuthRequest } from '../middlewares/auth.js'
 import { emitStoreEvent } from '../realtime.js'
 
 type ReceiptInputLine = { inventoryItemId: string; quantity: number; unitCode: string; unitPrice: number }
+
+type SupplierConfig = { supplierIds?: unknown; defaultSupplierId?: unknown }
+
+async function validateSupplierConfig(storeId: string, config: SupplierConfig) {
+    const supplierIds = Array.isArray(config.supplierIds)
+        ? [...new Set(config.supplierIds.map(String).filter((id) => mongoose.isValidObjectId(id)))]
+        : []
+    if (Array.isArray(config.supplierIds) && supplierIds.length !== config.supplierIds.length) throw new Error('Invalid supplier')
+    const defaultSupplierId = config.defaultSupplierId ? String(config.defaultSupplierId) : null
+    if (defaultSupplierId && (!mongoose.isValidObjectId(defaultSupplierId) || !supplierIds.includes(defaultSupplierId))) {
+        throw new Error('Default supplier must be selected')
+    }
+    const suppliers = await Supplier.find({ _id: { $in: supplierIds }, storeId }).select({ _id: 1 }).lean()
+    if (suppliers.length !== supplierIds.length) throw new Error('Invalid supplier')
+    return { supplierIds, defaultSupplierId }
+}
+
+async function syncIngredientSuppliers(storeId: string, inventoryItemId: mongoose.Types.ObjectId, config: SupplierConfig) {
+    const normalized = await validateSupplierConfig(storeId, config)
+    await IngredientSupplier.deleteMany({ storeId, inventoryItemId })
+    if (normalized.supplierIds.length) {
+        await IngredientSupplier.insertMany(normalized.supplierIds.map((supplierId) => ({
+            storeId,
+            inventoryItemId,
+            supplierId,
+            isDefault: supplierId === normalized.defaultSupplierId,
+        })))
+    }
+}
 
 async function normalizeReceiptLines(storeId: string, lines: ReceiptInputLine[], allowPendingUnitFallback = false) {
     if (!Array.isArray(lines) || !lines.length) throw new Error('At least one receipt line is required')
@@ -43,15 +74,23 @@ async function applyStockDeltas(storeId: string, deltas: Map<string, number>, se
 export const getInventoryItems = async (req: Request, res: Response) => {
     const storeId = (req as AuthRequest).user.storeId
     const items = await InventoryItem.find({ storeId, active: true }).sort({ name: 1 }).lean()
-    res.json({ success: true, data: items })
+    const links = await IngredientSupplier.find({ storeId, inventoryItemId: { $in: items.map((item) => item._id) } }).lean()
+    const linksByItem = new Map<string, typeof links>()
+    for (const link of links) linksByItem.set(String(link.inventoryItemId), [...(linksByItem.get(String(link.inventoryItemId)) ?? []), link])
+    res.json({ success: true, data: items.map((item) => {
+        const itemLinks = linksByItem.get(String(item._id)) ?? []
+        return { ...item, supplierIds: itemLinks.map((link) => String(link.supplierId)), defaultSupplierId: itemLinks.find((link) => link.isDefault)?.supplierId?.toString() ?? null }
+    }) })
 }
 
 export const createInventoryItem = async (req: Request, res: Response) => {
     try {
         const storeId = (req as AuthRequest).user.storeId
-        const { name, stockUnitCode, purchaseUnits = [], minimumStock = 0, note, inventoryStatus = 'active' } = req.body
+        const { name, stockUnitCode, purchaseUnits = [], minimumStock = 0, note, inventoryStatus = 'active', supplierIds, defaultSupplierId } = req.body
         if (!name || !stockUnitCode) return res.status(400).json({ success: false, message: 'Name and stock unit are required' })
+        const normalizedSuppliers = await validateSupplierConfig(String(storeId), { supplierIds, defaultSupplierId })
         const item = await InventoryItem.create({ storeId, name, stockUnitCode, purchaseUnits, minimumStock, note, inventoryStatus })
+        await syncIngredientSuppliers(String(storeId), item._id, normalizedSuppliers)
         emitStoreEvent(String(storeId), 'inventory.item.updated', { inventoryItemId: String(item._id), changedFields: ['created'] })
         return res.status(201).json({ success: true, data: item })
     } catch (error: any) {
@@ -63,9 +102,10 @@ export const createInventoryItem = async (req: Request, res: Response) => {
 export const updateInventoryItem = async (req: Request, res: Response) => {
     try {
         const storeId = (req as AuthRequest).user.storeId
-        const { name, stockUnitCode, purchaseUnits, minimumStock, note, active, inventoryStatus } = req.body
+        const { name, stockUnitCode, purchaseUnits, minimumStock, note, active, inventoryStatus, supplierIds, defaultSupplierId } = req.body
         const current = await InventoryItem.findOne({ _id: String(req.params.id), storeId }).select({ stockUnitCode: 1 }).lean()
         if (!current) return res.status(404).json({ success: false, message: 'Inventory item not found' })
+        const normalizedSuppliers = await validateSupplierConfig(String(storeId), { supplierIds, defaultSupplierId })
         if (stockUnitCode && stockUnitCode !== current.stockUnitCode) {
             const [hasReceipt, hasStocktake] = await Promise.all([
                 InventoryReceipt.exists({ storeId, inventoryStatus: { $ne: 'pending' }, 'lines.inventoryItemId': current._id }),
@@ -76,6 +116,7 @@ export const updateInventoryItem = async (req: Request, res: Response) => {
         const updates = { name, stockUnitCode, purchaseUnits, minimumStock, note, active, ...(inventoryStatus ? { inventoryStatus } : {}) }
         const item = await InventoryItem.findOneAndUpdate({ _id: String(req.params.id), storeId }, { $set: updates }, { new: true, runValidators: true })
         if (!item) return res.status(404).json({ success: false, message: 'Inventory item not found' })
+        await syncIngredientSuppliers(String(storeId), item._id, normalizedSuppliers)
         emitStoreEvent(String(storeId), 'inventory.item.updated', { inventoryItemId: String(item._id), changedFields: ['updated'] })
         return res.json({ success: true, data: item })
     } catch (error: any) {

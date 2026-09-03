@@ -1,5 +1,6 @@
 import { Client } from '@line/bot-sdk'
-import LineGroup, { type LineNotificationType } from '../models/line-group.js'
+import LineGroup from '../models/line-group.js'
+import StoreLineGroupConfig from '../models/store-line-group-config.js'
 
 export const sendMessageToGroup = async (groupId: string, text: string): Promise<boolean> => {
     const client = new Client({
@@ -19,7 +20,9 @@ export const sendMessageToGroup = async (groupId: string, text: string): Promise
     }
 }
 
-export const sendMessageToConfiguredGroups = async (storeId: string, type: LineNotificationType, text: string) => {
-    const groups = await LineGroup.find({ storeId, status: 'active', enabled: true, notificationTypes: type }).select({ lineGroupId: 1 }).lean()
-    await Promise.all(groups.map((group) => sendMessageToGroup(group.lineGroupId, text)))
+export const sendMessageToConfiguredGroups = async (storeId: string, text: string) => {
+    const config = await StoreLineGroupConfig.findOne({ storeId }).select({ dailyClosingLineGroupId: 1 }).lean()
+    if (!config?.dailyClosingLineGroupId) return
+    const group = await LineGroup.findOne({ _id: config.dailyClosingLineGroupId, storeId, usageStatus: 'assigned' }).select({ lineGroupId: 1 }).lean()
+    if (group) await sendMessageToGroup(group.lineGroupId, text)
 }

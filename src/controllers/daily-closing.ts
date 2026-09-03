@@ -10,6 +10,47 @@ import { getDailyClosingSummary as loadDailyClosingSummary } from '../services/d
 import type { AuthRequest } from '../middlewares/auth.js'
 import { emitStoreEvent } from '../realtime.js'
 import { enqueueClosingBackup } from '../services/backupJobs.js'
+import mongoose from 'mongoose'
+import LineGroup from '../models/line-group.js'
+import StoreLineGroupConfig from '../models/store-line-group-config.js'
+
+const dailyClosingLineGroupData = async (storeId: string) => {
+    const config = await StoreLineGroupConfig.findOne({ storeId }).populate({ path: 'dailyClosingLineGroupId', select: 'lineGroupId name storeId usageStatus' }).lean()
+    const currentId = config?.dailyClosingLineGroupId?._id
+    const groups = await LineGroup.find({ storeId, $or: [{ usageStatus: 'available' }, ...(currentId ? [{ _id: currentId }] : [])] }).select({ lineGroupId: 1, name: 1, usageStatus: 1 }).sort({ name: 1 }).lean()
+    return { enabled: Boolean(currentId), lineGroupId: currentId?.toString() ?? null, groups }
+}
+
+export const getDailyClosingLineGroup = async (req: Request, res: Response) => {
+    try { return res.json({ success: true, data: await dailyClosingLineGroupData((req as AuthRequest).user.storeId) }) }
+    catch (error) { console.error(error); return res.status(500).json({ success: false, message: 'Error fetching daily closing LINE group configuration' }) }
+}
+
+export const updateDailyClosingLineGroup = async (req: Request, res: Response) => {
+    const storeId = (req as AuthRequest).user.storeId
+    let claimedId: mongoose.Types.ObjectId | null = null
+    try {
+        const enabled = req.body?.enabled === true
+        const requestedId = enabled && req.body?.lineGroupId ? String(req.body.lineGroupId) : null
+        if (enabled && !requestedId) return res.status(400).json({ success: false, code: 'DAILY_CLOSING_LINE_GROUP_REQUIRED', message: 'A LINE group is required when notifications are enabled' })
+        const current = await StoreLineGroupConfig.findOne({ storeId }).lean()
+        const previousId = current?.dailyClosingLineGroupId
+        if (requestedId && !mongoose.isValidObjectId(requestedId)) return res.status(400).json({ success: false, code: 'INVALID_LINE_GROUP', message: 'Invalid LINE group' })
+        if (requestedId && String(previousId ?? '') !== requestedId) {
+            const result = await LineGroup.updateOne({ _id: requestedId, storeId, usageStatus: 'available' }, { $set: { usageStatus: 'assigned' } })
+            if (result.modifiedCount !== 1) return res.status(409).json({ success: false, code: 'LINE_GROUP_IN_USE', message: 'LINE group is unavailable' })
+            claimedId = new mongoose.Types.ObjectId(requestedId)
+        }
+        if (requestedId) await StoreLineGroupConfig.findOneAndUpdate({ storeId }, { $set: { dailyClosingLineGroupId: new mongoose.Types.ObjectId(requestedId) } }, { upsert: true })
+        else await StoreLineGroupConfig.updateOne({ storeId }, { $unset: { dailyClosingLineGroupId: 1 } })
+        if (previousId && String(previousId) !== requestedId) await LineGroup.updateOne({ _id: previousId }, { $set: { usageStatus: 'available' } })
+        return res.json({ success: true, data: await dailyClosingLineGroupData(storeId) })
+    } catch (error) {
+        if (claimedId) await LineGroup.updateOne({ _id: claimedId }, { $set: { usageStatus: 'available' } })
+        console.error(error)
+        return res.status(500).json({ success: false, message: 'Error updating daily closing LINE group configuration' })
+    }
+}
 
 export const createDailyClosing = async (req: Request, res: Response) => {
     try {
@@ -77,7 +118,6 @@ export const createDailyClosing = async (req: Request, res: Response) => {
         const formatted = format(now, 'dd/MM/yyyy HH:mm')
         void sendMessageToConfiguredGroups(
             storeId,
-            'daily_closing',
             `Kết toán (${formatted}):\n- Số tiền thực tế: ${actualTotal}\n- Số tiền hệ thống: ${calculatedSystemAmount}\n- Chênh lệch: ${actualTotal - calculatedSystemAmount}\n- Lý do: ${reason}`,
         ).catch((error) => console.error('Unable to send LINE closing notification', error))
         return res.status(201).json({ success: true, data: dailyClosing })

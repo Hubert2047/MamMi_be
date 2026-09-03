@@ -16,7 +16,7 @@ export const handleWebhook = async (req: Request, res: Response) => {
             if (event.source?.type !== 'group' || typeof event.source.groupId !== 'string') return
             await LineGroup.updateOne(
                 { lineGroupId: event.source.groupId },
-                { $setOnInsert: { lineGroupId: event.source.groupId, name: 'LINE group', enabled: false, status: 'pending', notificationTypes: [] } },
+                { $setOnInsert: { lineGroupId: event.source.groupId, name: 'LINE group', usageStatus: 'available' } },
                 { upsert: true },
             )
         }))
