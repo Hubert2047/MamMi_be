@@ -40,6 +40,7 @@ import storeTable from './routers/store-table.js'
 import posDevice from './routers/pos-device.js'
 import upload from './routers/upload.js'
 import lineGroup from './routers/line-group.js'
+import overview from './routers/overview.js'
 dotenv.config()
 
 
@@ -94,6 +95,7 @@ const app: Application = express()
     app.use('/api/orders', order)
     app.use('/api/categories', category)
     app.use('/api/stores', store)
+    app.use('/api/overview', overview)
     app.use('/api/tables', storeTable)
     app.use('/api/users', user)
     app.use('/api/expenses', expense)
