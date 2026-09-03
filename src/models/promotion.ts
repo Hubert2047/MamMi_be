@@ -17,11 +17,16 @@ export interface IPromotion extends Document {
     endsAt?: Date
 }
 
+const PromotionRewardSchema = new Schema({
+    type: { type: String, enum: ['percent', 'value'], required: true },
+    amount: { type: Number, required: true, min: 0, validate: { validator: function(this: { type: string }, amount: number) { return this.type === 'percent' ? Number.isFinite(amount) && amount <= 100 : Number.isSafeInteger(amount) }, message: 'Promotion money must be a non-negative integer' } },
+}, { _id: false })
+
 const PromotionRuleSchema = new Schema({
     target: { type: String, enum: ['order', 'product', 'addon', 'line'], required: true },
     productIds: [{ type: Schema.Types.ObjectId, ref: 'Item' }],
     addonIds: [{ type: Schema.Types.ObjectId, ref: 'Addon' }],
-    reward: { type: { type: String, enum: ['percent', 'value'], required: true }, amount: { type: Number, required: true, min: 0 } },
+    reward: { type: PromotionRewardSchema, required: true },
 }, { _id: false })
 
 const PromotionSchema = new Schema<IPromotion>({
@@ -29,7 +34,7 @@ const PromotionSchema = new Schema<IPromotion>({
     imageUrl: { type: String, trim: true },
     imagePublicId: { type: String, trim: true },
     mode: { type: String, enum: ['automatic', 'manual'], required: true },
-    minSubtotal: { type: Number, min: 0 },
+    minSubtotal: { type: Number, min: 0, validate: { validator: Number.isSafeInteger, message: 'Minimum subtotal must be a non-negative integer' } },
     priority: { type: Number, default: 0 },
     combinable: { type: Boolean, default: false },
     exclusiveGroup: { type: String, trim: true },

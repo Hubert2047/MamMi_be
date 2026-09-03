@@ -7,6 +7,7 @@ import { emitCatalogEventToStores, emitStoreEvent } from '../realtime.js'
 import { calculatePromotionPricing, isPromotionAvailableAt, type PricePromotion } from '../utils/promotionCalculations.js'
 import { expireEndedPromotions } from '../services/promotionPricing.js'
 import { deleteCloudinaryImage } from '../services/cloudinary.js'
+import { isNonNegativeTwd, isValidPromotionAmount } from '../utils/money.js'
 
 type Names = { vi: string; en: string; 'zh-TW': string }
 const namesOf = (value: unknown): Names | null => {
@@ -15,7 +16,8 @@ const namesOf = (value: unknown): Names | null => {
     return normalized.vi || normalized.en || normalized['zh-TW'] ? normalized : null
 }
 const nameFor = (names: Names, language: string) => names[language as keyof Names] || names.vi || names.en || names['zh-TW']
-const isValidRules = (rules: unknown) => Array.isArray(rules) && rules.length > 0 && rules.filter((rule: any) => rule?.target === 'order').length <= 1 && rules.every((rule: any) => ['order', 'product', 'addon', 'line'].includes(rule?.target) && ['percent', 'value'].includes(rule?.reward?.type) && Number.isFinite(Number(rule?.reward?.amount)) && Number(rule.reward.amount) >= 0 && (rule.reward.type !== 'percent' || Number(rule.reward.amount) <= 100))
+const isValidRules = (rules: unknown) => Array.isArray(rules) && rules.length > 0 && rules.filter((rule: any) => rule?.target === 'order').length <= 1 && rules.every((rule: any) => ['order', 'product', 'addon', 'line'].includes(rule?.target) && ['percent', 'value'].includes(rule?.reward?.type) && isValidPromotionAmount(rule.reward.type, rule.reward.amount))
+const isValidMinSubtotal = (value: unknown) => value === undefined || value === null || isNonNegativeTwd(value)
 const hasValidWindow = (startsAt: unknown, endsAt: unknown) => !startsAt || !endsAt || new Date(String(startsAt)).getTime() <= new Date(String(endsAt)).getTime()
 const isEditableStatus = (status: unknown): status is 'draft' | 'active' => status === 'draft' || status === 'active'
 const responseFor = (promotion: any, config: any, language: string) => ({
@@ -28,7 +30,7 @@ const responseFor = (promotion: any, config: any, language: string) => ({
 
 export const createPromotion = async (req: Request, res: Response) => {
     const names = namesOf(req.body.names)
-    if (!names || !isValidRules(req.body.rules) || !req.body.startsAt || !req.body.endsAt || !hasValidWindow(req.body.startsAt, req.body.endsAt)) return res.status(400).json({ success: false, message: 'Promotion name, rules, start time, and end time are required' })
+    if (!names || !isValidRules(req.body.rules) || !isValidMinSubtotal(req.body.minSubtotal) || !req.body.startsAt || !req.body.endsAt || !hasValidWindow(req.body.startsAt, req.body.endsAt)) return res.status(400).json({ success: false, message: 'Promotion name, rules, start time, and end time are required' })
     const storeIds = Array.isArray(req.body.storeIds) ? req.body.storeIds : []
     const imageUrl = req.body.imageUrl === undefined ? undefined : String(req.body.imageUrl).trim()
     const imagePublicId = req.body.imagePublicId === undefined ? undefined : String(req.body.imagePublicId).trim()
@@ -57,6 +59,7 @@ export const updatePromotion = async (req: Request, res: Response) => {
     const names = req.body.names === undefined ? undefined : namesOf(req.body.names)
     if (req.body.names !== undefined && !names) return res.status(400).json({ success: false, message: 'Promotion name is required' })
     if (req.body.rules !== undefined && !isValidRules(req.body.rules)) return res.status(400).json({ success: false, message: 'At least one valid rule is required' })
+    if (!isValidMinSubtotal(req.body.minSubtotal)) return res.status(400).json({ success: false, message: 'Minimum subtotal must be a non-negative integer' })
     if (req.body.status !== undefined && !isEditableStatus(req.body.status)) return res.status(400).json({ success: false, message: 'Promotion status must be draft or active' })
     if (!hasValidWindow(req.body.startsAt, req.body.endsAt)) return res.status(400).json({ success: false, message: 'The end time must not precede the start time' })
     const update: Record<string, unknown> = {}

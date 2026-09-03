@@ -15,4 +15,9 @@ describe('StoreItem availability fields', () => {
         expect(indexes).toContainEqual({ storeId: 1, permanentlyActive: 1, temporarilyUnavailable: 1 })
         expect(indexes).toContainEqual({ storeId: 1, temporarilyUnavailable: 1, temporarilyUnavailableUntil: 1 })
     })
+
+    it('rejects decimal and negative store prices', async () => {
+        await expect(new StoreItem({ storeId: '507f1f77bcf86cd799439011', itemId: '507f1f77bcf86cd799439012', price: { base: 10.5 } }).validate()).rejects.toThrow()
+        await expect(new StoreItem({ storeId: '507f1f77bcf86cd799439011', itemId: '507f1f77bcf86cd799439012', price: { base: -1 } }).validate()).rejects.toThrow()
+    })
 })

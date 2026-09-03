@@ -10,6 +10,7 @@ import { Role } from '../constants/role.js'
 import { nextStoreMidnight } from '../utils/storeAvailability.js'
 import { emitCatalogEventToStores, emitStoreEvent } from '../realtime.js'
 import { deleteCloudinaryImage } from '../services/cloudinary.js'
+import { isValidPriceMap } from '../utils/money.js'
 
 const optionLabel = (value: string) => value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'option'
 const normalizeNames = (value: unknown) => {
@@ -147,6 +148,7 @@ export const addStoreItem = async (req: Request, res: Response) => {
     try {
         const storeId = (req as AuthRequest).user.storeId
         const { itemId, price = {} } = req.body
+        if (!isValidPriceMap(price)) return res.status(400).json({ success: false, code: 'INVALID_MONEY_AMOUNT', message: 'Prices must be non-negative integers' })
         if (!await Item.exists({ _id: itemId })) return res.status(404).json({ success: false, message: 'Catalog item not found' })
         const storeItem = await StoreItem.findOneAndUpdate({ storeId, itemId }, { $set: { price }, $setOnInsert: { permanentlyActive: true, temporarilyUnavailable: false, temporarilyUnavailableUntil: null, visibility: { pos: true, qr: true, online: true }, addonDisplayMode: 'named' } }, { upsert: true, returnDocument: 'after', includeResultMetadata: false })
         emitStoreEvent(storeId, 'catalog.store-item.price.updated', { itemId: String(itemId), changedFields: ['price'] })
@@ -164,7 +166,10 @@ export const updateStoreItem = async (req: Request, res: Response) => {
         }
         await clearExpiredTemporaryAvailability(storeId)
         const set: Record<string, unknown> = {}
-        if (req.body.price !== undefined) set.price = req.body.price
+        if (req.body.price !== undefined) {
+            if (!isValidPriceMap(req.body.price)) return res.status(400).json({ success: false, code: 'INVALID_MONEY_AMOUNT', message: 'Prices must be non-negative integers' })
+            set.price = req.body.price
+        }
         if (req.body.permanentlyActive !== undefined) set.permanentlyActive = Boolean(req.body.permanentlyActive)
         if (req.body.visibility && typeof req.body.visibility === 'object') set.visibility = { pos: req.body.visibility.pos !== false, qr: req.body.visibility.qr !== false, online: req.body.visibility.online !== false }
         if (req.body.addonDisplayMode !== undefined) set.addonDisplayMode = req.body.addonDisplayMode === 'merged' ? 'merged' : 'named'
@@ -295,6 +300,7 @@ export const createItem = async (req: Request, res: Response) => {
         if (!names) return res.status(400).json({ success: false, message: 'At least one product name is required' })
         const description = req.body.description === undefined ? undefined : normalizeNames(req.body.description)
         const { price = {}, ...itemData } = req.body
+        if (!isValidPriceMap(price)) return res.status(400).json({ success: false, code: 'INVALID_MONEY_AMOUNT', message: 'Prices must be non-negative integers' })
         const item = new Item({ ...itemData, names, ...(description ? { description } : {}), variants: normalizeOptions(req.body.variants, 'variant'), noteOptions: normalizeOptions(req.body.noteOptions, 'note') })
         await item.save()
         const storeId = (req as AuthRequest).user.storeId
@@ -367,6 +373,7 @@ export const updateItem = async (req: Request, res: Response) => {
         if (req.body.names !== undefined && !names) return res.status(400).json({ success: false, message: 'At least one product name is required' })
         const description = req.body.description === undefined ? undefined : normalizeNames(req.body.description)
         const { price, ...itemData } = req.body
+        if (price !== undefined && !isValidPriceMap(price)) return res.status(400).json({ success: false, code: 'INVALID_MONEY_AMOUNT', message: 'Prices must be non-negative integers' })
         const updated = await Item.findByIdAndUpdate(id, { ...itemData, ...(names ? { names } : {}), ...(description ? { description } : req.body.description !== undefined ? { description: {} } : {}), ...(req.body.variants ? { variants: normalizeOptions(req.body.variants, 'variant') } : {}), ...(req.body.noteOptions ? { noteOptions: normalizeOptions(req.body.noteOptions, 'note') } : {}) }, { returnDocument: 'after', runValidators: true })
         const storeId = (req as AuthRequest).user.storeId
         const storeItem = await StoreItem.findOneAndUpdate({ storeId, itemId: id }, { $set: { ...(price !== undefined ? { price } : {}) } }, { returnDocument: 'after', includeResultMetadata: false })

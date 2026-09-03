@@ -6,6 +6,7 @@ import { emitCatalogEventToStores, emitStoreEvent } from '../realtime.js'
 import Store from '../models/store.js'
 import { Role } from '../constants/role.js'
 import { nextStoreMidnight } from '../utils/storeAvailability.js'
+import { isNonNegativeTwd } from '../utils/money.js'
 
 export type AddonNames = { vi: string; en: string; 'zh-TW': string }
 
@@ -50,6 +51,7 @@ export const addStoreAddon = async (req: Request, res: Response) => {
     try {
         const storeId = (req as AuthRequest).user.storeId
         const { addonId, priceExtra = 0, permanentlyActive = true } = req.body
+        if (!isNonNegativeTwd(priceExtra)) return res.status(400).json({ success: false, code: 'INVALID_MONEY_AMOUNT', message: 'Addon price must be a non-negative integer' })
         if (req.body.permanentlyActive !== undefined && ![Role.Admin, Role.SuperAdmin].includes((req as AuthRequest).user.role)) return res.status(403).json({ message: 'Only Admin or SuperAdmin can change permanent availability' })
         if (!await AddonModel.exists({ _id: addonId })) return res.status(404).json({ message: 'Addon not found' })
         const storeAddon = await StoreAddon.findOneAndUpdate({ storeId, addonId }, { $set: { priceExtra, permanentlyActive, temporarilyUnavailable: false, temporarilyUnavailableUntil: null } }, { upsert: true, returnDocument: 'after', includeResultMetadata: false })
@@ -66,7 +68,10 @@ export const updateStoreAddon = async (req: Request, res: Response) => {
         if (req.body.permanentlyActive !== undefined && ![Role.Admin, Role.SuperAdmin].includes(authUser.role)) return res.status(403).json({ message: 'Only Admin or SuperAdmin can change permanent availability' })
         await clearExpiredTemporaryAvailability(storeId)
         const set: Record<string, unknown> = {}
-        if (req.body.priceExtra !== undefined) set.priceExtra = Number(req.body.priceExtra)
+        if (req.body.priceExtra !== undefined) {
+            if (!isNonNegativeTwd(req.body.priceExtra)) return res.status(400).json({ success: false, code: 'INVALID_MONEY_AMOUNT', message: 'Addon price must be a non-negative integer' })
+            set.priceExtra = req.body.priceExtra
+        }
         if (req.body.permanentlyActive !== undefined) set.permanentlyActive = Boolean(req.body.permanentlyActive)
         if (req.body.temporarilyUnavailable !== undefined) {
             const unavailable = Boolean(req.body.temporarilyUnavailable)

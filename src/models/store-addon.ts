@@ -12,7 +12,7 @@ export interface IStoreAddon extends Document {
 const StoreAddonSchema = new Schema<IStoreAddon>({
     storeId: { type: Schema.Types.ObjectId, ref: 'Store', required: true },
     addonId: { type: Schema.Types.ObjectId, ref: 'Addon', required: true },
-    priceExtra: { type: Number, required: true, default: 0 },
+    priceExtra: { type: Number, required: true, default: 0, min: 0, validate: { validator: Number.isSafeInteger, message: 'Price must be a non-negative integer' } },
     permanentlyActive: { type: Boolean, default: true },
     temporarilyUnavailable: { type: Boolean, default: false },
     temporarilyUnavailableUntil: { type: Date, default: null },

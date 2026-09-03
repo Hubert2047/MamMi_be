@@ -70,6 +70,32 @@ describe('promotion calculations', () => {
         expect(result.appliedPromotions[0]?.allocations).toEqual([{ itemId: 'tea', productDiscountAmount: 40, addonDiscounts: [{ addonId: 'boba', discountAmount: 5 }] }])
     })
 
+    it('applies every item reward before an order reward from a mixed promotion', () => {
+        const result = calculatePromotionPricing([{ id: 'tea', basePrice: 100, quantity: 1, addons: [{ id: 'boba', amount: 1, priceExtra: 100 }] }], [
+            { id: 'mixed', name: 'Mixed', version: 1, mode: 'automatic', priority: 2, combinable: true, rules: [
+                { target: 'product', productIds: ['tea'], reward: { type: 'value', amount: 10 } },
+                { target: 'order', reward: { type: 'percent', amount: 10 } },
+            ] },
+            { id: 'addon', name: 'Addon', version: 1, mode: 'automatic', priority: 1, combinable: true, rules: [
+                { target: 'addon', addonIds: ['boba'], reward: { type: 'value', amount: 50 } },
+            ] },
+        ])
+
+        expect(result.total).toBe(126)
+        expect(result.appliedPromotions.map((promotion) => [promotion.promotionId, promotion.discountAmount])).toEqual([['mixed', 24], ['addon', 50]])
+    })
+
+    it('rounds the final total half-up and allocates integer discounts back to lines', () => {
+        const promotion = { id: 'ten-percent', name: 'Ten percent', version: 1, mode: 'automatic' as const, priority: 1, combinable: true, rules: [{ target: 'product' as const, reward: { type: 'percent' as const, amount: 10 } }] }
+        const single = calculatePromotionPricing([{ id: 'tea', basePrice: 95, quantity: 1, addons: [] }], [promotion])
+        const split = calculatePromotionPricing([{ id: 'tea', basePrice: 95, quantity: 1, addons: [] }, { id: 'coffee', basePrice: 95, quantity: 1, addons: [] }], [promotion])
+
+        expect(single.total).toBe(86)
+        expect(single.appliedPromotions[0]?.discountAmount).toBe(9)
+        expect(split.total).toBe(171)
+        expect(split.appliedPromotions[0]?.allocations.map((allocation) => allocation.productDiscountAmount)).toEqual([10, 9])
+    })
+
     it('keeps non-combinable promotions exclusive by priority', () => {
         const result = calculatePromotionPricing(items, [
             { id: 'low', name: 'Low', version: 1, mode: 'automatic', priority: 1, combinable: false, rules: [{ target: 'order', reward: { type: 'value', amount: 20 } }] },

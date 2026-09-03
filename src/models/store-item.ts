@@ -15,7 +15,7 @@ const StoreItemSchema = new Schema<IStoreItem>(
     {
         storeId: { type: Schema.Types.ObjectId, ref: 'Store', required: true },
         itemId: { type: Schema.Types.ObjectId, ref: 'Item', required: true },
-        price: { type: Map, of: Number, required: true, default: {} },
+        price: { type: Map, of: { type: Number, min: 0, validate: { validator: Number.isSafeInteger, message: 'Price must be a non-negative integer' } }, required: true, default: {} },
         visibility: {
             pos: { type: Boolean, default: true },
             qr: { type: Boolean, default: true },

@@ -48,6 +48,35 @@ export const isPromotionAvailableAt = (promotion: { status: string; startsAt?: D
 
 const discountFor = (subtotal: number, reward: Reward) => Math.max(0, Math.min(subtotal, reward.type === 'percent' ? subtotal * reward.amount / 100 : reward.amount))
 
+const roundTwd = (amount: number) => Math.floor(amount + 0.5 + Number.EPSILON)
+
+const finalizePromotionPricing = (grossSubtotal: number, exactTotal: number, appliedPromotions: AppliedPromotion[]): PromotionPricing => {
+    const total = roundTwd(exactTotal)
+    const targetDiscount = roundTwd(grossSubtotal) - total
+    const entries: { amount: number; index: number; set(amount: number): void }[] = []
+
+    appliedPromotions.forEach((promotion) => promotion.allocations.forEach((allocation) => {
+        if (allocation.productDiscountAmount > 0) entries.push({ amount: allocation.productDiscountAmount, index: entries.length, set: (amount) => { allocation.productDiscountAmount = amount } })
+        allocation.addonDiscounts.forEach((addonDiscount) => {
+            if (addonDiscount.discountAmount > 0) entries.push({ amount: addonDiscount.discountAmount, index: entries.length, set: (amount) => { addonDiscount.discountAmount = amount } })
+        })
+    }))
+
+    const roundedEntries = entries.map((entry) => ({ ...entry, amount: Math.floor(entry.amount + Number.EPSILON), fraction: entry.amount - Math.floor(entry.amount + Number.EPSILON) }))
+    let remainingUnits = targetDiscount - roundedEntries.reduce((sum, entry) => sum + entry.amount, 0)
+    const byLargestFraction = [...roundedEntries].sort((a, b) => b.fraction - a.fraction || a.index - b.index)
+    for (let index = 0; remainingUnits > 0 && byLargestFraction.length; index += 1, remainingUnits -= 1) byLargestFraction[index % byLargestFraction.length]!.amount += 1
+    for (const entry of roundedEntries) entry.set(entry.amount)
+
+    return {
+        total,
+        appliedPromotions: appliedPromotions.map((promotion) => ({
+            ...promotion,
+            discountAmount: promotion.allocations.reduce((sum, allocation) => sum + allocation.productDiscountAmount + allocation.addonDiscounts.reduce((addonSum, addon) => addonSum + addon.discountAmount, 0), 0),
+        })).filter((promotion) => promotion.discountAmount > 0),
+    }
+}
+
 const estimatedDiscount = (items: PromotionOrderItem[], promotion: PricePromotion): number => {
     const gross = items.reduce((sum, item) => sum + calculateOrderItemTotal(item), 0)
     return promotion.rules.reduce((sum, rule) => {
@@ -76,14 +105,14 @@ export const calculatePromotionPricing = (items: PromotionOrderItem[], promotion
 
     const remainingProduct = items.map((item) => item.basePrice * item.quantity)
     const remainingAddon = items.map((item) => item.addons.map((addon) => addon.amount * addon.priceExtra * item.quantity))
-    const appliedPromotions: AppliedPromotion[] = []
-    const itemPromotions = accepted.filter((promotion) => promotion.rules.some((rule) => rule.target !== 'order'))
-    const orderPromotions = accepted.filter((promotion) => promotion.rules.every((rule) => rule.target === 'order'))
+    const allocationsByPromotion = new Map(accepted.map((promotion) => [promotion.id, items.map((item) => ({ itemId: item.id, productDiscountAmount: 0, addonDiscounts: [] as { addonId: string; discountAmount: number }[] }))]))
 
-    for (const promotion of [...itemPromotions, ...orderPromotions]) {
-        const allocations = items.map((item) => ({ itemId: item.id, productDiscountAmount: 0, addonDiscounts: [] as { addonId: string; discountAmount: number }[] }))
-        for (const rule of promotion.rules) {
-            if (rule.target === 'order') continue
+    // Rule stages are global, rather than per-promotion: an order reward must never
+    // see a subtotal before another accepted product/add-on/line reward is applied.
+    for (const target of ['product', 'addon', 'line'] as const) {
+        for (const promotion of accepted) {
+            const allocations = allocationsByPromotion.get(promotion.id)!
+            for (const rule of promotion.rules.filter((candidate) => candidate.target === target)) {
             items.forEach((item, itemIndex) => {
                 const matchesProduct = !rule.productIds?.length || rule.productIds.includes(item.id)
                 if (!matchesProduct) return
@@ -114,9 +143,14 @@ export const calculatePromotionPricing = (items: PromotionOrderItem[], promotion
                 })
             })
         }
-        if (promotion.rules.some((rule) => rule.target === 'order')) {
+        }
+    }
+
+    for (const promotion of accepted) {
+        const allocations = allocationsByPromotion.get(promotion.id)!
+        const rule = promotion.rules.find((candidate) => candidate.target === 'order')
+        if (rule) {
             const subtotal = remainingProduct.reduce((sum, amount) => sum + amount, 0) + remainingAddon.reduce((sum, addons) => sum + addons.reduce((addonSum, amount) => addonSum + amount, 0), 0)
-            const rule = promotion.rules.find((candidate) => candidate.target === 'order')!
             let remainingDiscount = discountFor(subtotal, rule.reward)
             items.forEach((item, itemIndex) => {
                 const productDiscount = Math.min(remainingProduct[itemIndex]!, remainingDiscount)
@@ -131,9 +165,14 @@ export const calculatePromotionPricing = (items: PromotionOrderItem[], promotion
                 })
             })
         }
+    }
+
+    const appliedPromotions: AppliedPromotion[] = []
+    for (const promotion of accepted) {
+        const allocations = allocationsByPromotion.get(promotion.id)!
         const discountAmount = allocations.reduce((sum, allocation) => sum + allocation.productDiscountAmount + allocation.addonDiscounts.reduce((addonSum, addon) => addonSum + addon.discountAmount, 0), 0)
         if (discountAmount) appliedPromotions.push({ promotionId: promotion.id, promotionVersion: promotion.version, name: promotion.name, mode: promotion.mode, targets: [...new Set(promotion.rules.map((rule) => rule.target))], discountAmount, allocations })
     }
     const total = remainingProduct.reduce((sum, amount) => sum + amount, 0) + remainingAddon.reduce((sum, addons) => sum + addons.reduce((addonSum, amount) => addonSum + amount, 0), 0)
-    return { total, appliedPromotions }
+    return finalizePromotionPricing(grossSubtotal, total, appliedPromotions)
 }
