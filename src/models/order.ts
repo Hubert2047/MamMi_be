@@ -32,6 +32,8 @@ export interface AppliedPromotion {
     promotionId: string
     promotionVersion: number
     name: string
+    /** Optional for orders created before localized promotion snapshots existed. */
+    names?: { vi: string; en: string; 'zh-TW': string }
     mode: 'automatic' | 'manual'
     targets?: ('order' | 'product' | 'addon' | 'line')[]
     discountAmount: number
@@ -87,6 +89,7 @@ const OrderItemAddonSchema = new Schema<OrderItemAddon>(
 const AppliedPromotionSchema = new Schema<AppliedPromotion>(
     {
         name: { type: String },
+        names: { vi: String, en: String, 'zh-TW': String },
         promotionId: { type: String, required: true },
         promotionVersion: { type: Number, required: true },
         mode: { type: String, enum: ['automatic', 'manual'], required: true },
