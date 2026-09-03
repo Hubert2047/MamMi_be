@@ -12,6 +12,8 @@ import { applyPublicMenuPromotionDisplays, calculateStorePromotionPricing, getPu
 import { allocateOrderSequence, getCurrentOrderPeriodId } from '../services/orderNumber.js'
 import { createKitchenPrintJobs } from '../services/printJobs.js'
 import { emitStoreEvent } from '../realtime.js'
+import { createPublicOrderQuote, matchesPublicOrderQuote } from '../utils/publicOrderQuote.js'
+import { normalizePublicOptionSelections } from '../utils/publicOrderOptions.js'
 
 const CART_TTL_MS = 2 * 60 * 60 * 1000
 const QR_ORDER_WINDOW_MS = 60 * 1000
@@ -100,6 +102,36 @@ const verifyTurnstile = async (token: unknown) => {
     return result.success === true && (!result.action || result.action === 'online_order')
 }
 
+const validGuestCartLines = (lines: unknown): lines is any[] => Array.isArray(lines) && lines.every((line: any) =>
+    line?.itemId && Number.isInteger(line.quantity) && line.quantity >= 1 && line.quantity <= 99
+    && Array.isArray(line.optionSelections || []) && Array.isArray(line.noteOptions) && Array.isArray(line.addonIds)
+    && new Set(line.addonIds.map(String)).size === line.addonIds.length,
+)
+
+/** Rebuilds public-order items entirely from the current public catalog. */
+const buildGuestOrderItems = async (storeId: string, source: unknown, lines: any[]) => {
+    if (!validGuestCartLines(lines)) throw new Error('INVALID_CART_LINES')
+    const menu = await getPublicMenu(storeId, source === 'online' ? 'online' : 'qr')
+    const byId = new Map(menu.map((item: any) => [item.id, item]))
+    return lines.map((line: any) => {
+        const item: any = byId.get(line.itemId)
+        if (!item) throw new Error('ITEM_NOT_AVAILABLE')
+        if (line.variant && !item.variants.some((option: any) => option.id === line.variant)) throw new Error('INVALID_OPTION')
+        if (line.noteOptions.some((id: string) => !item.noteOptions.some((option: any) => option.id === id))) throw new Error('INVALID_OPTION')
+        const optionSelections = normalizePublicOptionSelections(line.optionSelections, item.optionGroups || [])
+        const addons = line.addonIds.map((id: string) => {
+            const addon = item.addons.find((candidate: any) => candidate.id === id)
+            if (!addon) throw new Error('ADDON_NOT_AVAILABLE')
+            return { id, name: addon.names.vi || addon.names.en || '', priceExtra: addon.priceExtra, amount: 1 }
+        })
+        return {
+            id: line.itemId, itemId: randomBytes(12).toString('hex'), name: item.names.vi || item.names.en || '', quantity: line.quantity,
+            basePrice: item.price, variant: line.variant || '', addons, addonDisplayMode: item.addonDisplayMode === 'merged' ? 'merged' : 'named',
+            optionSelections, noteOptions: line.noteOptions, note: String(line.note || '').slice(0, 300), componentSelections: Array.isArray(line.componentSelections) ? line.componentSelections : [],
+        }
+    })
+}
+
 export const getQrMenu = async (req: Request, res: Response) => {
     try {
         const { table, session, code } = await getQrContext(String(req.params.token))
@@ -161,7 +193,7 @@ export const getGuestCart = async (req: Request, res: Response) => {
 
 export const updateGuestCart = async (req: Request, res: Response) => {
     const lines = Array.isArray(req.body.lines) ? req.body.lines : null
-    if (!lines || lines.some((line: any) => !line.itemId || !Number.isInteger(line.quantity) || line.quantity < 1 || line.quantity > 99 || !Array.isArray(line.noteOptions) || !Array.isArray(line.addonIds))) return res.status(400).json({ success: false, message: 'Invalid cart lines' })
+    if (!lines || !validGuestCartLines(lines)) return res.status(400).json({ success: false, code: 'INVALID_CART_LINES', message: 'Invalid cart lines' })
     const existing = await GuestCart.findOne({ cartToken: String(req.params.cartToken), status: 'draft' }).select({ source: 1, storeId: 1, tableSessionId: 1 }).lean()
     if (!existing) return res.status(409).json({ success: false, code: 'CART_LOCKED', message: 'Cart is unavailable' })
     if (rejectDisabledOnlineOrdering(res, existing.source)) return
@@ -182,21 +214,12 @@ export const previewGuestCart = async (req: Request, res: Response) => {
     if (rejectDisabledOnlineOrdering(res, cart.source)) return
     if (!(await requireActiveCartSession(cart))) return res.status(409).json({ success: false, code: 'SESSION_EXPIRED', message: 'Table ordering session is not active' })
     const lines = Array.isArray(req.body?.lines) ? req.body.lines : cart.lines
-    if (!Array.isArray(lines) || lines.some((line: any) => !line.itemId || !Number.isInteger(line.quantity) || line.quantity < 1 || line.quantity > 99 || !Array.isArray(line.noteOptions) || !Array.isArray(line.addonIds))) return res.status(400).json({ success: false, message: 'Invalid cart lines' })
+    if (!validGuestCartLines(lines)) return res.status(400).json({ success: false, code: 'INVALID_CART_LINES', message: 'Invalid cart lines' })
     try {
-        const menu = await getPublicMenu(String(cart.storeId), cart.source === 'online' ? 'online' : 'qr')
-        const byId = new Map(menu.map((item: any) => [item.id, item]))
-        const items = lines.map((line: any) => {
-            const item: any = byId.get(line.itemId)
-            if (!item) throw new Error('ITEM_NOT_AVAILABLE')
-            if (line.variant && !item.variants.some((option: any) => option.id === line.variant)) throw new Error('INVALID_OPTION')
-            if (line.noteOptions.some((id: string) => !item.noteOptions.some((option: any) => option.id === id))) throw new Error('INVALID_OPTION')
-            const addons = line.addonIds.map((id: string) => { const addon = item.addons.find((candidate: any) => candidate.id === id); if (!addon) throw new Error('ADDON_NOT_AVAILABLE'); return { id, name: addon.names.vi || addon.names.en || '', priceExtra: addon.priceExtra, amount: 1 } })
-            return { id: line.itemId, itemId: randomBytes(12).toString('hex'), name: item.names.vi || item.names.en || '', quantity: line.quantity, basePrice: item.price, variant: line.variant || '', addons, addonDisplayMode: item.addonDisplayMode === 'merged' ? 'merged' : 'named', noteOptions: line.noteOptions, note: String(line.note || '').slice(0, 300), componentSelections: Array.isArray(line.componentSelections) ? line.componentSelections : [] }
-        })
+        const items = await buildGuestOrderItems(String(cart.storeId), cart.source, lines)
         const pricing = await calculateStorePromotionPricing(String(cart.storeId), items)
-        const cartHash = createHash('sha256').update(JSON.stringify({ storeId: String(cart.storeId), lines })).digest('base64url')
-        res.json({ success: true, data: { ...pricing, cartHash, expiresAt: new Date(Date.now() + 60_000).toISOString() } })
+        const quote = createPublicOrderQuote(cart.cartToken, String(cart.storeId), lines, pricing)
+        res.json({ success: true, data: { items, pricing, ...pricing, ...quote } })
     } catch (error: any) {
         res.status(400).json({ success: false, code: error?.message || 'CART_PREVIEW_FAILED', message: 'Unable to preview cart' })
     }
@@ -207,31 +230,21 @@ export const confirmGuestCart = async (req: Request, res: Response) => {
     if (!draft) return res.status(409).json({ success: false, code: 'CART_LOCKED', message: 'Cart was already confirmed or is unavailable' })
     if (rejectDisabledOnlineOrdering(res, draft.source)) return
     if (!(await requireActiveCartSession(draft))) return res.status(409).json({ success: false, code: 'SESSION_EXPIRED', message: 'Table ordering session is not active' })
-    if ((draft.source || 'qr') === 'qr' && !(await reserveQrOrderSlot(draft.storeId, draft.tableSessionId))) return res.status(429).json({ success: false, code: 'QR_ORDER_RATE_LIMITED', message: 'Too many orders were sent for this table session' })
-    if ((draft.source || 'qr') === 'online') {
-        try {
-            if (!(await verifyTurnstile(req.body?.turnstileToken))) return res.status(400).json({ success: false, code: 'TURNSTILE_FAILED', message: 'Human verification failed' })
-        } catch (error: any) {
-            if (error?.message === 'TURNSTILE_NOT_CONFIGURED') return res.status(500).json({ success: false, code: error.message, message: 'Human verification is not configured' })
-            throw error
-        }
-    }
     const cart = await GuestCart.findOneAndUpdate({ cartToken: String(req.params.cartToken), status: 'draft' }, { $set: { status: 'confirming' } }, { returnDocument: 'after', includeResultMetadata: false })
     if (!cart) return res.status(409).json({ success: false, code: 'CART_LOCKED', message: 'Cart was already confirmed or is unavailable' })
     try {
         if (!cart.lines.length) throw new Error('Cart is empty')
-        const menu = await getPublicMenu(String(cart.storeId), cart.source === 'online' ? 'online' : 'qr')
-        const byId = new Map(menu.map((item: any) => [item.id, item]))
-        const items = cart.lines.map((line) => {
-            const item: any = byId.get(line.itemId)
-            if (!item) throw new Error('ITEM_NOT_AVAILABLE')
-            if (line.variant && !item.variants.some((option: any) => option.id === line.variant)) throw new Error('INVALID_OPTION')
-            if (line.noteOptions.some((id) => !item.noteOptions.some((option: any) => option.id === id))) throw new Error('INVALID_OPTION')
-            const addons = line.addonIds.map((id) => { const addon = item.addons.find((candidate: any) => candidate.id === id); if (!addon) throw new Error('ADDON_NOT_AVAILABLE'); return { id, name: addon.names.vi || addon.names.en || '', priceExtra: addon.priceExtra, amount: 1 } })
-            return { id: line.itemId, itemId: randomBytes(12).toString('hex'), name: item.names.vi || item.names.en || '', quantity: line.quantity, basePrice: item.price, variant: line.variant || '', addons, addonDisplayMode: item.addonDisplayMode === 'merged' ? 'merged' : 'named', noteOptions: line.noteOptions, note: String(line.note || '').slice(0, 300), componentSelections: Array.isArray(line.componentSelections) ? line.componentSelections : [] }
-        })
-        const periodId = await getCurrentOrderPeriodId(String(cart.storeId)); const sequence = await allocateOrderSequence(String(cart.storeId), periodId)
+        const items = await buildGuestOrderItems(String(cart.storeId), cart.source, cart.lines)
+        const pricing = await calculateStorePromotionPricing(String(cart.storeId), items)
+        if (!matchesPublicOrderQuote(req.body?.quoteToken, cart.cartToken, String(cart.storeId), cart.lines, pricing)) {
+            const quote = createPublicOrderQuote(cart.cartToken, String(cart.storeId), cart.lines, pricing)
+            await GuestCart.updateOne({ _id: cart._id, status: 'confirming' }, { $set: { status: 'draft' } })
+            return res.status(409).json({ success: false, code: 'ORDER_PRICING_CHANGED', message: 'Order pricing changed', data: { items, pricing, ...quote } })
+        }
         const source = cart.source || 'qr'
+        if (source === 'online') {
+            if (!(await verifyTurnstile(req.body?.turnstileToken))) throw new Error('TURNSTILE_FAILED')
+        }
         const customer = source === 'online' ? {
             name: typeof req.body?.customer?.name === 'string' ? req.body.customer.name.trim().slice(0, 120) : undefined,
             phone: normalizePhone(req.body?.customer?.phone).slice(0, 40) || undefined,
@@ -242,7 +255,8 @@ export const confirmGuestCart = async (req: Request, res: Response) => {
             if (!phone) throw new Error('PHONE_REQUIRED')
             if (!(await reserveOnlinePhoneOrderSlot(cart.storeId, phone))) throw new Error('ONLINE_ORDER_RATE_LIMITED')
         }
-        const pricing = await calculateStorePromotionPricing(String(cart.storeId), items)
+        if (source === 'qr' && !(await reserveQrOrderSlot(cart.storeId, cart.tableSessionId))) throw new Error('QR_ORDER_RATE_LIMITED')
+        const periodId = await getCurrentOrderPeriodId(String(cart.storeId)); const sequence = await allocateOrderSequence(String(cart.storeId), periodId)
         const pickupAt = typeof req.body?.pickupAt === 'string' && !Number.isNaN(Date.parse(req.body.pickupAt)) ? new Date(req.body.pickupAt) : new Date(Date.now() + 60 * 60 * 1000)
         const order = await new Order({ storeId: cart.storeId, number: sequence, sequence, periodId, items, totalPrice: pricing.total, appliedPromotions: pricing.appliedPromotions, status: 'pending', type: cart.type || 'dine_in', table: cart.table || '', tableSessionId: cart.tableSessionId, paymentMethod: 'cash', customer, source, pickupAt }).save()
         await GuestCart.updateOne({ _id: cart._id }, { $set: { status: 'confirmed', orderId: order._id, expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) } })
@@ -252,6 +266,6 @@ export const confirmGuestCart = async (req: Request, res: Response) => {
     } catch (error: any) {
         await GuestCart.updateOne({ _id: cart._id, status: 'confirming' }, { $set: { status: 'draft' } })
         const code = error?.message || 'ORDER_CONFIRM_FAILED'
-        res.status(code === 'TURNSTILE_NOT_CONFIGURED' ? 500 : code === 'ONLINE_ORDER_RATE_LIMITED' ? 429 : 400).json({ success: false, code, message: 'Unable to confirm order' })
+        res.status(code === 'TURNSTILE_NOT_CONFIGURED' ? 500 : code === 'ONLINE_ORDER_RATE_LIMITED' || code === 'QR_ORDER_RATE_LIMITED' ? 429 : 400).json({ success: false, code, message: 'Unable to confirm order' })
     }
 }

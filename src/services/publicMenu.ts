@@ -15,6 +15,13 @@ const normalizeOptions = (options: unknown, prefix: string): LocalizedOption[] =
     return { id: option?.id || `${prefix}-${index + 1}`, names: normalizeNames(option?.names) }
 })
 
+const normalizeOptionGroups = (groups: unknown) => (Array.isArray(groups) ? groups : []).map((group: any, index) => {
+    const id = group?.id || `option-group-${index + 1}`
+    const options = normalizeOptions(group?.options, `${id}-option`)
+    const defaultOptionId = options.some((option) => option.id === group?.defaultOptionId) ? group.defaultOptionId : undefined
+    return { id, names: normalizeNames(group?.names), selection: group?.selection === 'multiple' ? 'multiple' : 'single', required: group?.required === true, ...(defaultOptionId ? { defaultOptionId } : {}), options }
+})
+
 async function clearExpiredAvailability(storeId: string) {
     const expired = { storeId, temporarilyUnavailable: true, temporarilyUnavailableUntil: { $lte: new Date() } }
     await Promise.all([
@@ -65,6 +72,7 @@ export async function getPublicMenu(storeId: string, channel: 'qr' | 'online' = 
             price: basePrice,
             addonDisplayMode: storeItem.addonDisplayMode === 'merged' ? 'merged' : 'named',
             variants: normalizeOptions(item.variants, 'variant'),
+            optionGroups: normalizeOptionGroups(item.optionGroups),
             noteOptions: normalizeOptions(item.noteOptions, 'note'),
             type: item.type || 'product',
             components: (item.components || []).map((component: any, index: number) => ({ componentId: `${component.itemId?._id || component.itemId}-${index}`, itemId: String(component.itemId?._id || component.itemId), quantity: Number(component.quantity) || 1, names: normalizeNames(component.itemId?.names), noteOptions: normalizeOptions(component.itemId?.noteOptions, 'note') })),

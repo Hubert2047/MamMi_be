@@ -19,6 +19,7 @@ import Store from '../models/store.js'
 import { allocateOrderSequence, getCurrentOrderPeriodId, getNextOrderSequence } from '../services/orderNumber.js'
 import { createKitchenPrintJobs } from '../services/printJobs.js'
 import { expireEndedPromotions } from '../services/promotionPricing.js'
+import { normalizeOrderItemsForPricing } from '../services/orderPricing.js'
 
 const MAX_NOTE_LENGTH = 40
 
@@ -107,9 +108,15 @@ export const createOrder = async (req: Request, res: Response) => {
         if (availableItems !== validItemIds.length) return res.status(400).json({ success: false, code: 'ITEM_NOT_AVAILABLE', message: 'One or more selected products are no longer available' })
 
         if (order.checkoutPending && order._id) {
-            const updated = await Order.findByIdAndUpdate(
-                { _id: order._id, storeId, version: order.version },
-                { $set: { status: 'paid', paymentMethod: order.paymentMethod, paidAt: getPaidAt('paid') }, $inc: { version: 1 } },
+            const existing = await Order.findOne({ _id: order._id, storeId, status: 'pending', version: order.version }).lean()
+            if (!existing) return res.status(409).json({ success: false, code: 'ORDER_VERSION_CONFLICT', message: 'Order was changed or is no longer pending' })
+            const normalizedItems = await normalizeOrderItemsForPricing(storeId, order.type, order.items)
+            const selectedPromotionIds = Array.isArray(order.selectedPromotionIds) ? order.selectedPromotionIds.map(String) : []
+            const pricing = await calculatePromotionsForOrder(storeId, normalizedItems, selectedPromotionIds)
+            if (!matchesExpectedPromotionPricing(order.expectedPricing, pricing)) return res.status(409).json({ success: false, code: 'ORDER_PRICING_CHANGED', message: 'Order pricing changed', data: { items: normalizedItems, pricing, reason: 'CURRENT_PRICING_CHANGED' } })
+            const updated = await Order.findOneAndUpdate(
+                { _id: order._id, storeId, status: 'pending', version: order.version },
+                { $set: { status: 'paid', paymentMethod: order.paymentMethod, paidAt: getPaidAt('paid'), items: normalizedItems, totalPrice: pricing.total, appliedPromotions: pricing.appliedPromotions }, $inc: { version: 1 } },
                 { returnDocument: 'after' },
             )
             if (!updated) {
@@ -132,63 +139,12 @@ export const createOrder = async (req: Request, res: Response) => {
             return res.status(400).json({ success: false, code: 'ADDON_QUANTITY_INVALID', message: 'An add-on can only be selected once per item' })
         }
 
-        const storeItemConfigs = await StoreItem.find({ storeId, itemId: { $in: validItemIds } }).select({ itemId: 1, addonDisplayMode: 1 }).lean()
-        const storeItemConfigById = new Map(storeItemConfigs.map((entry: any) => [String(entry.itemId), entry]))
-        const catalogItems = await Item.find({ _id: { $in: validItemIds } }).select('names variants noteOptions optionGroups addons addonConfigs').populate('addons', 'names name').lean()
-        const catalogById = new Map(catalogItems.map((catalogItem: any) => [String(catalogItem._id), catalogItem]))
-        const chineseName = (value: any) => value?.names?.['zh-TW'] || value?.names?.vi || value?.names?.en || value?.name || ''
-        const optionName = (option: any) => {
-            if (typeof option === 'string') return option
-            return chineseName(option) || option?.id || ''
-        }
-
-        const normalizedItems = order.items.map((item: any) => {
-            const catalogItem = catalogById.get(String(item.id))
-            const selectedVariant = catalogItem?.variants?.find((option: any) => option?.id === item.variant) || item.variant
-            const selectedNoteOptions = (item.noteOptions || []).map((selectedOption: any) => catalogItem?.noteOptions?.find((option: any) => option?.id === selectedOption) || selectedOption)
-            const selectedAddons = (item.addons || []).map((addon: any) => {
-                const catalogAddon = catalogItem?.addons?.find((candidate: any) => String(candidate?._id) === String(addon.id))
-                const config = (catalogItem?.addonConfigs || []).find((entry: any) => String(entry.addonId) === String(addon.id))
-                const maxQuantity = config?.maxQuantity === null ? null : config?.maxQuantity ?? 1
-                const amount = Math.max(1, Math.floor(Number(addon.amount) || 1))
-                if (!catalogAddon || (maxQuantity !== null && amount > maxQuantity)) throw new Error('ADDON_QUANTITY_INVALID')
-                return { ...addon, amount, printName: chineseName(catalogAddon) || addon.name }
-            })
-            const printNoteOptions = selectedNoteOptions.map((selectedOption: any) => optionName(selectedOption))
-            const requestedSelections = Array.isArray(item.optionSelections) ? item.optionSelections : []
-            const optionSelections = requestedSelections.map((selection: any) => {
-                const group = (catalogItem?.optionGroups || []).find((candidate: any) => candidate.id === selection?.groupId)
-                const option = group?.options?.find((candidate: any) => candidate.id === selection?.optionId)
-                if (!group || !option) throw new Error('Invalid product option selection')
-                return { groupId: group.id, optionId: option.id, name: optionName(option) }
-            })
-            for (const group of catalogItem?.optionGroups || []) {
-                if (group.required && !optionSelections.some((selection: any) => selection.groupId === group.id)) throw new Error('Required product option is missing')
-                if (group.selection === 'single' && optionSelections.filter((selection: any) => selection.groupId === group.id).length > 1) throw new Error('Only one option may be selected')
-            }
-            return {
-                id: item.id,
-                itemId: item.itemId,
-                name: item.name,
-                quantity: item.quantity || 1,
-                basePrice: item.basePrice,
-                variant: optionName(selectedVariant),
-                addons: selectedAddons,
-                addonDisplayMode: storeItemConfigById.get(String(item.id))?.addonDisplayMode === 'merged' ? 'merged' : 'named',
-                noteOptions: printNoteOptions,
-                note: item.note,
-                printName: chineseName(catalogItem) || item.name,
-                printVariant: optionName(selectedVariant),
-                printAddons: selectedAddons,
-                printNoteOptions,
-                optionSelections,
-            }
-        })
+        const normalizedItems = await normalizeOrderItemsForPricing(storeId, order.type, order.items)
 
         const selectedPromotionIds = Array.isArray(order.selectedPromotionIds) ? order.selectedPromotionIds.map(String) : []
         if (selectedPromotionIds.length > 1) return res.status(400).json({ success: false, code: 'MANUAL_PROMOTION_LIMIT', message: 'Only one manual promotion may be selected' })
         const pricing = await calculatePromotionsForOrder(storeId, normalizedItems, selectedPromotionIds)
-        if (!matchesExpectedPromotionPricing(order.expectedPricing, pricing)) return res.status(409).json({ success: false, code: 'PROMOTION_PRICE_CHANGED', message: 'Promotion pricing changed', data: pricing })
+        if (!matchesExpectedPromotionPricing(order.expectedPricing, pricing)) return res.status(409).json({ success: false, code: 'ORDER_PRICING_CHANGED', message: 'Order pricing changed', data: { items: normalizedItems, pricing, reason: 'CURRENT_PRICING_CHANGED' } })
         const totalPrice = pricing.total
         const periodId = await getCurrentOrderPeriodId(storeId)
         const sequence = await allocateOrderSequence(storeId, periodId)
@@ -352,15 +308,25 @@ export const printKitchenOrder = async (req: Request, res: Response) => {
 export const updateOrderStatus = async (req: Request, res: Response) => {
     try {
         const id = String(req.params.id)
-        const { status, version } = req.body
+        const { status, version, expectedPricing } = req.body
         const storeId = (req as AuthRequest).user.storeId
-        const order = await Order.findOne({ _id: id, storeId }).select({ paidAt: 1 }).lean()
+        const order = await Order.findOne({ _id: id, storeId }).select({ paidAt: 1, status: 1, type: 1, items: 1, appliedPromotions: 1 }).lean()
         if (!order) return res.status(404).json({ success: false, message: 'Order not found' })
         if (order.paidAt) await assertFinancialPeriodOpen(storeId, order.paidAt)
 
+        let pricingUpdate: Record<string, unknown> = {}
+        if (status === 'paid') {
+            if (order.status !== 'pending') return res.status(409).json({ success: false, code: 'ORDER_VERSION_CONFLICT', message: 'Only pending orders can be paid' })
+            const normalizedItems = await normalizeOrderItemsForPricing(storeId, order.type, order.items)
+            const selectedPromotionIds = (order.appliedPromotions || []).filter((promotion: any) => promotion.mode === 'manual').map((promotion: any) => String(promotion.promotionId))
+            const pricing = await calculatePromotionsForOrder(storeId, normalizedItems, selectedPromotionIds)
+            if (!matchesExpectedPromotionPricing(expectedPricing, pricing)) return res.status(409).json({ success: false, code: 'ORDER_PRICING_CHANGED', message: 'Order pricing changed', data: { items: normalizedItems, pricing, reason: 'CURRENT_PRICING_CHANGED' } })
+            pricingUpdate = { items: normalizedItems, totalPrice: pricing.total, appliedPromotions: pricing.appliedPromotions }
+        }
+
         const updated = await Order.findOneAndUpdate(
             { _id: id, storeId, version },
-            { $set: { status, ...(status === 'paid' ? { paidAt: getPaidAt('paid') } : {}) }, $inc: { version: 1 } },
+            { $set: { status, ...pricingUpdate, ...(status === 'paid' ? { paidAt: getPaidAt('paid') } : {}) }, $inc: { version: 1 } },
             { returnDocument: 'after', includeResultMetadata: false },
         )
         if (!updated) return res.status(409).json({ success: false, code: 'ORDER_VERSION_CONFLICT', message: 'Order was changed by another device' })
@@ -442,31 +408,21 @@ export const updatePendingOrder = async (req: Request, res: Response) => {
             if (availableAddons !== validAddonIds.length) return res.status(400).json({ success: false, code: 'ADDON_NOT_AVAILABLE', message: 'One or more selected add-ons are no longer available' })
         }
 
-        const catalogItems = await Item.find({ _id: { $in: validItemIds } }).select('addons addonConfigs').populate('addons', '_id').lean()
-        const catalogById = new Map(catalogItems.map((catalogItem: any) => [String(catalogItem._id), catalogItem]))
         for (const item of items) {
-            const catalogItem = catalogById.get(String(item.id))
             const selectedAddonIds = (item.addons || []).map((addon: any) => String(addon.id))
             if (new Set(selectedAddonIds).size !== selectedAddonIds.length) return res.status(400).json({ success: false, code: 'ADDON_QUANTITY_INVALID', message: 'An add-on can only be selected once per item' })
-            for (const addon of item.addons || []) {
-                const addonId = String(addon.id)
-                const availableOnItem = catalogItem?.addons?.some((candidate: any) => String(candidate._id) === addonId)
-                const config = (catalogItem?.addonConfigs || []).find((entry: any) => String(entry.addonId) === addonId)
-                const maxQuantity = config?.maxQuantity === null ? null : config?.maxQuantity ?? 1
-                const amount = Math.max(1, Math.floor(Number(addon.amount) || 1))
-                if (!availableOnItem || (maxQuantity !== null && amount > maxQuantity)) return res.status(400).json({ success: false, code: 'ADDON_QUANTITY_INVALID', message: 'An add-on quantity exceeds its product limit' })
-            }
         }
 
         const selectedIds = Array.isArray(selectedPromotionIds) ? selectedPromotionIds.map(String) : []
         if (selectedIds.length > 1) return res.status(400).json({ success: false, code: 'MANUAL_PROMOTION_LIMIT', message: 'Only one manual promotion may be selected' })
-        const pricing = await calculatePromotionsForOrder(storeId, items, selectedIds)
-        if (!matchesExpectedPromotionPricing(expectedPricing, pricing)) return res.status(409).json({ success: false, code: 'PROMOTION_PRICE_CHANGED', message: 'Promotion pricing changed', data: pricing })
+        const normalizedItems = await normalizeOrderItemsForPricing(storeId, type, items)
+        const pricing = await calculatePromotionsForOrder(storeId, normalizedItems, selectedIds)
+        if (!matchesExpectedPromotionPricing(expectedPricing, pricing)) return res.status(409).json({ success: false, code: 'ORDER_PRICING_CHANGED', message: 'Order pricing changed', data: { items: normalizedItems, pricing, reason: 'CURRENT_PRICING_CHANGED' } })
         const updated = await Order.findOneAndUpdate(
             { _id: id, storeId, status: 'pending', version },
             {
                 $set: {
-                    items,
+                    items: normalizedItems,
                     type,
                     table: type === 'dine_in' ? String(table).trim() : '',
                     appliedPromotions: pricing.appliedPromotions,
