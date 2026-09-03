@@ -66,6 +66,9 @@ export const createDailyClosing = async (req: Request, res: Response) => {
         ).catch((error) => console.error('Unable to send LINE closing notification', error))
         return res.status(201).json({ success: true, data: dailyClosing })
     } catch (error) {
+        if ((error as { code?: number })?.code === 11000) {
+            return res.status(409).json({ success: false, code: 'CLOSING_ALREADY_CREATED', message: 'This closing period was already confirmed by another device' })
+        }
         console.error(error)
         return res.status(500).json({ success: false, message: 'Error creating DailyClosing', error })
     }

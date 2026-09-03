@@ -58,5 +58,9 @@ const DailyClosingSchema = new Schema<IDailyClosing>(
 DailyClosingSchema.index({ storeId: 1, createdAt: 1 })
 DailyClosingSchema.index({ storeId: 1, status: 1, periodEnd: -1 })
 DailyClosingSchema.index({ storeId: 1, status: 1, periodStart: 1, periodEnd: 1 })
+DailyClosingSchema.index(
+    { storeId: 1, periodStart: 1 },
+    { unique: true, partialFilterExpression: { status: 'confirmed' }, name: 'unique_confirmed_closing_period' },
+)
 
 export default mongoose.model<IDailyClosing>('DailyClosing', DailyClosingSchema)
