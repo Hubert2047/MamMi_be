@@ -20,6 +20,11 @@ export interface IDailyClosing extends Document {
     difference: number
     confirmedAt: Date
     confirmedBy?: string
+    confirmedByEmployee?: {
+        employeeId: mongoose.Types.ObjectId
+        numberId: string
+        name: string
+    }
     voidedAt?: Date
     voidedBy?: string
     voidReason?: string
@@ -43,6 +48,11 @@ const DailyClosingSchema = new Schema<IDailyClosing>(
         difference: { type: Number, required: true },
         confirmedAt: { type: Date, required: true },
         confirmedBy: String,
+        confirmedByEmployee: {
+            employeeId: { type: Schema.Types.ObjectId, ref: 'Employee', required: true },
+            numberId: { type: String, required: true },
+            name: { type: String, required: true },
+        },
         voidedAt: Date,
         voidedBy: String,
         voidReason: String,

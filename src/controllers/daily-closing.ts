@@ -1,5 +1,6 @@
 import type { Request, Response } from 'express'
 import DailyClosing from '../models/daily-closing.js'
+import Employee from '../models/employee.js'
 import { getFromDayUntilNow, TIME_ZONE } from '../utils/index.js'
 import { sendMessageToConfiguredGroups } from '../services/line.js'
 import { fromZonedTime, toZonedTime } from 'date-fns-tz'
@@ -12,7 +13,7 @@ import { enqueueClosingBackup } from '../services/backupJobs.js'
 
 export const createDailyClosing = async (req: Request, res: Response) => {
     try {
-        const { actualTotal, systemAmount, cash, reason } = req.body
+        const { actualTotal, systemAmount, cash, reason, employeeNumberId } = req.body
         if (!Number.isFinite(Number(actualTotal)) || !Number.isFinite(Number(systemAmount)) || !cash || typeof cash !== 'object') {
             return res.status(400).json({ success: false, message: 'Invalid daily closing amounts or cash data' })
         }
@@ -26,6 +27,16 @@ export const createDailyClosing = async (req: Request, res: Response) => {
 
         const periodEnd = new Date()
         const storeId = (req as AuthRequest).user.storeId
+        if (typeof employeeNumberId !== 'string' || !employeeNumberId.trim()) {
+            return res.status(400).json({ success: false, code: 'EMPLOYEE_NUMBER_ID_REQUIRED', message: 'Employee number ID is required' })
+        }
+        const employee = await Employee.findOne({ numberId: employeeNumberId.trim(), storeId }).select({ _id: 1, numberId: 1, name: 1, active: 1 }).lean()
+        if (!employee) {
+            return res.status(400).json({ success: false, code: 'EMPLOYEE_NOT_FOUND', message: 'Employee not found' })
+        }
+        if (employee.active === false) {
+            return res.status(403).json({ success: false, code: 'EMPLOYEE_INACTIVE', message: 'Employee is inactive' })
+        }
         const summary = await loadDailyClosingSummary(storeId, periodEnd)
         const calculatedSystemAmount = summary.systemAmount
         if (requiresClosingReason(Number(actualTotal) - calculatedSystemAmount, reason)) {
@@ -48,6 +59,11 @@ export const createDailyClosing = async (req: Request, res: Response) => {
             difference: Number(actualTotal) - calculatedSystemAmount,
             confirmedAt: periodEnd,
             confirmedBy: (req as AuthRequest).user?.account,
+            confirmedByEmployee: {
+                employeeId: employee._id,
+                numberId: employee.numberId,
+                name: employee.name,
+            },
         })
         await dailyClosing.save()
         try {

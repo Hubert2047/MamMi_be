@@ -9,4 +9,14 @@ describe('DailyClosing concurrency index', () => {
             { unique: true, partialFilterExpression: { status: 'confirmed' }, name: 'unique_confirmed_closing_period' },
         ])
     })
+
+    it('stores an immutable employee snapshot for the closing operator', () => {
+        const employeeIdPath = DailyClosing.schema.path('confirmedByEmployee.employeeId')
+        const numberIdPath = DailyClosing.schema.path('confirmedByEmployee.numberId')
+        const namePath = DailyClosing.schema.path('confirmedByEmployee.name')
+
+        expect(employeeIdPath?.options.ref).toBe('Employee')
+        expect(numberIdPath?.options.required).toBe(true)
+        expect(namePath?.options.required).toBe(true)
+    })
 })

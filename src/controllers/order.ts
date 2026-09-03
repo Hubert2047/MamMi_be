@@ -22,6 +22,16 @@ import { expireEndedPromotions } from '../services/promotionPricing.js'
 import { normalizeOrderItemsForPricing } from '../services/orderPricing.js'
 
 const MAX_NOTE_LENGTH = 40
+const orderInputErrorMessages: Record<string, string> = {
+    ITEM_NOT_AVAILABLE: 'One or more selected products are no longer available',
+    ITEM_STORE_CONFIG_NOT_FOUND: 'This product is not configured for the current store',
+    ITEM_CATALOG_NOT_FOUND: 'This product no longer exists in the catalog',
+    ITEM_PRICE_NOT_CONFIGURED: 'This product has no valid base price for the selected order type',
+    ADDON_NOT_AVAILABLE: 'One or more selected add-ons are no longer available',
+    ITEM_QUANTITY_INVALID: 'One or more product quantities are invalid',
+    ADDON_QUANTITY_INVALID: 'An add-on can only be selected once per item',
+    INVALID_OPTION: 'One or more selected options are no longer valid',
+}
 
 const calculatePromotionsForOrder = async (storeId: string, items: PromotionOrderItem[], selectedPromotionIds: string[] = []) => {
     const now = new Date()
@@ -184,6 +194,10 @@ export const createOrder = async (req: Request, res: Response) => {
         const nextNumber = await getNextNumber(storeId)
         return res.status(201).json({ success: true, data: nextNumber })
     } catch (error) {
+        const code = error instanceof Error ? error.message : undefined
+        if (code && orderInputErrorMessages[code]) {
+            return res.status(400).json({ success: false, code, message: orderInputErrorMessages[code] })
+        }
         console.error('Error creating order:', error)
         res.status(500).json({ success: false, message: 'Error creating order', error })
     }

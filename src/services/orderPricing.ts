@@ -6,7 +6,8 @@ import type { PromotionOrderItem } from '../utils/promotionCalculations.js'
 type OrderType = 'dine_in' | 'takeaway' | 'uber' | 'foodpanda'
 
 const displayName = (value: any) => value?.names?.vi || value?.names?.en || value?.names?.['zh-TW'] || value?.name || ''
-const priceForOrderType = (type: OrderType, price: any) => type === 'uber' ? price?.uber : type === 'foodpanda' ? price?.foodpanda : price?.base
+const priceValue = (price: any, key: string) => price instanceof Map ? price.get(key) : price?.[key]
+const priceForOrderType = (type: OrderType, price: any) => type === 'uber' ? priceValue(price, 'uber') : type === 'foodpanda' ? priceValue(price, 'foodpanda') : priceValue(price, 'base')
 
 /** Builds order items from server catalog data. Client-supplied prices/names are never used for pricing. */
 export async function normalizeOrderItemsForPricing(storeId: string, type: OrderType, rawItems: any[]): Promise<PromotionOrderItem[]> {
@@ -30,7 +31,9 @@ export async function normalizeOrderItemsForPricing(storeId: string, type: Order
         const catalogItem = catalogById.get(itemId)
         const basePrice = Number(priceForOrderType(type, storeItem?.price))
         const quantity = Number(item.quantity)
-        if (!storeItem || !catalogItem || !Number.isFinite(basePrice) || basePrice < 0) throw new Error('ITEM_NOT_AVAILABLE')
+        if (!storeItem) throw new Error('ITEM_STORE_CONFIG_NOT_FOUND')
+        if (!catalogItem) throw new Error('ITEM_CATALOG_NOT_FOUND')
+        if (!Number.isFinite(basePrice) || basePrice < 0) throw new Error('ITEM_PRICE_NOT_CONFIGURED')
         if (!Number.isInteger(quantity) || quantity < 1) throw new Error('ITEM_QUANTITY_INVALID')
 
         const selectedVariant = catalogItem.variants?.find((option: any) => option?.id === item.variant) || item.variant

@@ -32,4 +32,17 @@ describe('order pricing normalization', () => {
         expect(item?.basePrice).toBe(900)
         expect(item?.addons[0]?.priceExtra).toBe(300)
     })
+
+    it('accepts a zero base price stored as a Mongoose map', async () => {
+        mocks.storeItemFind.mockReturnValue(query([{ itemId: 'item-1', price: new Map([['base', 0]]), addonDisplayMode: 'named' }]))
+        mocks.itemFind.mockReturnValue(query([{ _id: 'item-1', names: { vi: 'Free item' }, variants: [], noteOptions: [], optionGroups: [], addons: [], addonConfigs: [] }]))
+        mocks.storeAddonFind.mockReturnValue(query([]))
+
+        const [item] = await normalizeOrderItemsForPricing('store-1', 'dine_in', [{
+            id: 'item-1', itemId: 'line-1', name: 'Free item', basePrice: 9999, quantity: 1,
+            variant: '', noteOptions: [], note: '', addons: [],
+        }])
+
+        expect(item?.basePrice).toBe(0)
+    })
 })

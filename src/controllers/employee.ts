@@ -4,11 +4,18 @@ import EmployeeSalaryHistory from '../models/employee-salary-history.js'
 import { type AuthRequest } from '../middlewares/auth.js'
 
 const storeIdFor = (req: Request) => (req as AuthRequest).user.storeId
+const employeeNumberPattern = /^\d{4}$/
+
+const isValidEmployeeNumber = (value: unknown): value is string =>
+    typeof value === 'string' && employeeNumberPattern.test(value)
 
 export const createEmployee = async (req: Request, res: Response) => {
     try {
         const { name, numberId, note, active, employmentType, role, salaryType, salaryAmount, startDate, endDate } = req.body
         const storeId = storeIdFor(req)
+        if (!isValidEmployeeNumber(numberId)) {
+            return res.status(400).json({ success: false, code: 'EMPLOYEE_NUMBER_ID_INVALID', message: 'Employee number ID must contain exactly 4 digits' })
+        }
         const employee = await Employee.findOne({ numberId })
         if (employee) {
             return res.status(400).json({ success: false, message: 'Employee already exists' })
@@ -18,6 +25,9 @@ export const createEmployee = async (req: Request, res: Response) => {
         await EmployeeSalaryHistory.create({ employeeId: newEmployee._id, salaryType: newEmployee.salaryType, amount: newEmployee.salaryAmount, currency: 'TWD', effectiveFrom: newEmployee.startDate })
         res.status(201).json({ success: true, data: newEmployee })
     } catch (error) {
+        if ((error as { code?: number })?.code === 11000) {
+            return res.status(400).json({ success: false, message: 'Employee already exists' })
+        }
         res.status(500).json({ success: false, message: 'Error creating Employee', error })
     }
 }
@@ -84,6 +94,9 @@ export const updateEmployee = async (req: Request, res: Response) => {
         const current = await Employee.findOne({ _id: String(id), storeId: storeIdFor(req) } as any)
         if (!current) {
             return res.status(404).json({ success: false, message: 'Employee not found' })
+        }
+        if (!isValidEmployeeNumber(numberId)) {
+            return res.status(400).json({ success: false, code: 'EMPLOYEE_NUMBER_ID_INVALID', message: 'Employee number ID must contain exactly 4 digits' })
         }
 
         const update: any = {
