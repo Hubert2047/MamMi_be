@@ -10,17 +10,17 @@ import {
   updateOrderPayment,
   updatePendingOrder,
   updateOrderCustomer,
-  printKitchenOrder
+  printKitchenOrder,
 } from "../controllers/order.js";
 import authenticateToken from "../middlewares/auth.js";
 
 const router = Router();
 
-router.post("/",authenticateToken, createOrder);
+router.post("/", authenticateToken, createOrder);
 router.get("/", authenticateToken, getOrders);
 router.get("/next-order-number", authenticateToken, getNextOrderNumber);
 router.get("/sales-by-payment", authenticateToken, getSalesByPaymentMethod);
-router.put("/payment/:id", authenticateToken, updateOrderPayment);   
+router.put("/payment/:id", authenticateToken, updateOrderPayment);
 router.put("/:id", authenticateToken, updatePendingOrder);
 router.put("/:id/customer", authenticateToken, updateOrderCustomer);
 router.post("/:id/print-kitchen", authenticateToken, printKitchenOrder);

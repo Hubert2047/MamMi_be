@@ -1,10 +1,15 @@
-import { Router } from 'express'
-import express from 'express'
-import { handleWebhook } from '../controllers/webhook.js'
-import { lineMiddleware } from '../middlewares/line.js'
+import { Router } from "express";
+import express from "express";
+import { handleWebhook } from "../controllers/webhook.js";
+import { lineMiddleware } from "../middlewares/line.js";
 
-const router = Router()
+const router = Router();
 
-router.post('/', express.raw({ type: 'application/json' }), lineMiddleware, handleWebhook)
+router.post(
+  "/",
+  express.raw({ type: "application/json" }),
+  lineMiddleware,
+  handleWebhook,
+);
 
-export default router
+export default router;
