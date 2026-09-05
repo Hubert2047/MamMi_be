@@ -143,7 +143,8 @@ export const getQrMenu = async (req: Request, res: Response) => {
         if (!store) return res.status(404).json({ success: false, code: 'STORE_NOT_AVAILABLE', message: 'Store is not available' })
         const [items, promotions] = await Promise.all([getPublicMenu(String(table.storeId), 'qr'), getPublicCatalogPromotions(String(table.storeId))])
         const realtimeToken = publicRealtimeTokenForStore(String(table.storeId))
-        res.json({ success: true, data: { store: { name: store.name }, table: { code: table.code, name: table.name }, items: applyPublicMenuPromotionDisplays(items, promotions), realtimeToken } })
+        const publicPromotions = promotions.map(({ id, names, descriptions, imageUrl, minSubtotal, startsAt, endsAt }: any) => ({ id, names, descriptions, imageUrl, minSubtotal, startsAt, endsAt }))
+        res.json({ success: true, data: { store: { name: store.name }, table: { code: table.code, name: table.name }, items: applyPublicMenuPromotionDisplays(items, promotions), promotions: publicPromotions, realtimeToken } })
     } catch (error) {
         console.error('Error fetching QR menu:', error)
         res.status(500).json({ success: false, message: 'Unable to fetch menu' })

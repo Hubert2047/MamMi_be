@@ -31,7 +31,16 @@ export const getPublicCatalogPromotions = async (storeId: string) => {
         if (!promotion || promotion.mode !== 'automatic' || !isPromotionAvailableAt(promotion, now)) return []
         return [{
             id: String(promotion._id),
+            names: {
+                vi: promotion.names?.vi || '',
+                en: promotion.names?.en || '',
+                'zh-TW': promotion.names?.['zh-TW'] || '',
+            },
+            descriptions: publicPromotionDescriptions(promotion),
+            imageUrl: promotion.imageUrl || undefined,
             minSubtotal: promotion.minSubtotal,
+            startsAt: promotion.startsAt || undefined,
+            endsAt: promotion.endsAt || undefined,
             priority: promotion.priority,
             combinable: promotion.combinable,
             exclusiveGroup: promotion.exclusiveGroup || '',
@@ -46,6 +55,28 @@ export const getPublicCatalogPromotions = async (storeId: string) => {
 }
 
 const displayDiscount = (price: number, reward: { type: 'percent' | 'value'; amount: number }) => Math.min(price, Math.max(0, reward.type === 'percent' ? price * reward.amount / 100 : reward.amount))
+
+const publicPromotionDescriptions = (promotion: any) => {
+    const targetLabels = {
+        vi: { order: 'toàn bộ đơn hàng', product: 'sản phẩm được chọn', addon: 'topping được chọn', line: 'món được chọn' },
+        en: { order: 'the entire order', product: 'selected products', addon: 'selected add-ons', line: 'selected items' },
+        'zh-TW': { order: '整筆訂單', product: '指定餐點', addon: '指定加料', line: '指定品項' },
+    }
+    const descriptions = (locale: 'vi' | 'en' | 'zh-TW') => promotion.rules.map((rule: any) => {
+        const discount = rule.reward.type === 'percent' ? `${rule.reward.amount}%` : `${rule.reward.amount} NT$`
+        const target = targetLabels[locale][rule.target as keyof typeof targetLabels.vi] || targetLabels[locale].product
+        if (locale === 'vi') return `Giảm ${discount} cho ${target}${promotion.minSubtotal !== undefined ? ` từ ${promotion.minSubtotal} NT$ trở lên` : ''}`
+        if (locale === 'en') return `Save ${discount} on ${target}${promotion.minSubtotal !== undefined ? ` for orders from ${promotion.minSubtotal} NT$` : ''}`
+        const minimum = promotion.minSubtotal !== undefined ? `消費滿 NT$${promotion.minSubtotal}` : ''
+        if (rule.target === 'order') {
+            return rule.reward.type === 'percent'
+                ? `${minimum}${minimum ? ' ' : ''}享 ${Math.max(0, 10 - rule.reward.amount / 10)} 折優惠`
+                : `${minimum}${minimum ? ' ' : ''}現折 NT$${rule.reward.amount}`
+        }
+        return `${target}享 ${rule.reward.type === 'percent' ? `${Math.max(0, 10 - rule.reward.amount / 10)} 折` : `現折 NT$${rule.reward.amount}`}優惠${minimum ? `，${minimum}` : ''}`
+    }).join(' · ')
+    return { vi: descriptions('vi'), en: descriptions('en'), 'zh-TW': descriptions('zh-TW') }
+}
 
 /** Pre-compute only context-free product/add-on display prices for public menus. */
 export const applyPublicMenuPromotionDisplays = (items: any[], promotions: any[]) => items.map((item) => {
