@@ -387,11 +387,17 @@ export const getDailyClosings = async (req: Request, res: Response) => {
     const page = Math.max(1, Number(req.query.page) || 1);
     const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 10));
     const filter: any = { storeId: (req as AuthRequest).user.storeId };
+    const parseBoundary = (value: unknown) => {
+      const raw = String(value);
+      return /(?:Z|[+-]\d{2}:?\d{2})$/.test(raw)
+        ? new Date(raw)
+        : fromZonedTime(raw, TIME_ZONE);
+    };
     if (from || to) {
-      filter.periodStart = {};
+      filter.periodEnd = {};
       if (from)
-        filter.periodStart.$gte = fromZonedTime(String(from), TIME_ZONE);
-      if (to) filter.periodStart.$lte = fromZonedTime(String(to), TIME_ZONE);
+        filter.periodEnd.$gte = parseBoundary(from);
+      if (to) filter.periodEnd.$lt = parseBoundary(to);
     } else if (days) {
       const daysNumber = Number(days);
       const { start } = getFromDayUntilNow(daysNumber);
@@ -402,7 +408,7 @@ export const getDailyClosings = async (req: Request, res: Response) => {
     const [dailyClosings, total, confirmed, voided, latestConfirmed] =
       await Promise.all([
         DailyClosing.find(filter)
-          .sort({ periodStart: 1, createdAt: 1, _id: 1 })
+          .sort({ periodEnd: 1, createdAt: 1, _id: 1 })
           .skip((page - 1) * limit)
           .limit(limit)
           .lean(),

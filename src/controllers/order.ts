@@ -254,12 +254,12 @@ export const getOrders = async (req: Request, res: Response) => {
         const { days, from, to } = req.query
         const storeId = (req as AuthRequest).user.storeId
         const filter: any = { storeId }
-        let paidAtFilter: { $gte?: Date; $gt?: Date; $lte: Date }
+        let paidAtFilter: { $gte?: Date; $gt?: Date; $lt?: Date; $lte?: Date }
         if (from || to) {
             const fromDate = from ? new Date(String(from)) : undefined
             const toDate = to ? new Date(String(to)) : new Date()
             if ((fromDate && Number.isNaN(fromDate.getTime())) || Number.isNaN(toDate.getTime())) return res.status(400).json({ success: false, message: 'Invalid order date range' })
-            paidAtFilter = { ...(fromDate ? { $gte: fromDate } : {}), $lte: toDate }
+            paidAtFilter = { ...(fromDate ? { $gte: fromDate } : {}), $lt: toDate }
         } else if (days) {
             const daysNumber = Number(days)
             const { start } = getFromDayUntilNow(daysNumber)

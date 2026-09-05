@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
 import { fromZonedTime, toZonedTime } from "date-fns-tz";
-import { endOfDay, startOfDay } from "date-fns";
+import { addDays, startOfDay } from "date-fns";
 import Store from "../models/store.js";
 import Order from "../models/order.js";
 import Expense from "../models/expense.js";
@@ -19,16 +19,13 @@ const parseDateRange = (from: unknown, to: unknown) => {
     (to !== undefined && !isDateOnly(to) && !isDateTime(to))
   )
     return null;
-  const zonedBoundary = (value: string, endOfMinute: boolean) =>
-    isDateOnly(value)
-      ? fromZonedTime(
-          `${value} ${endOfMinute ? "23:59:59.999" : "00:00:00"}`,
-          TIME_ZONE,
-        )
-      : fromZonedTime(
-          `${value.replace("T", " ")}:${endOfMinute ? "59.999" : "00"}`,
-          TIME_ZONE,
-        );
+  const zonedBoundary = (value: string, isEnd: boolean) => {
+    if (isDateOnly(value)) {
+      const boundary = fromZonedTime(`${value} 00:00:00`, TIME_ZONE);
+      return isEnd ? addDays(boundary, 1) : boundary;
+    }
+    return fromZonedTime(`${value.replace("T", " ")}:00`, TIME_ZONE);
+  };
   const start =
     from !== undefined
       ? zonedBoundary(String(from), false)
@@ -55,7 +52,7 @@ export const getSuperAdminOverview = async (req: Request, res: Response) => {
       .sort({ name: 1 })
       .lean();
     const storeIds = stores.map((store) => store._id);
-    const dateFilter = { $gte: range.start, $lte: range.end };
+    const dateFilter = { $gte: range.start, $lt: range.end };
     const [orders, orderPayments, expenses, revenues, closings] =
       await Promise.all([
         Order.aggregate([
